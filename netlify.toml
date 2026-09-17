@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22.18.0"
+  NITRO_PRESET = "netlify"
+  NETLIFY_NEXT_PLUGIN_SKIP = "true"
+
+[dev]
+  command = "npm run dev"
+  targetPort = 5173
+  port = 8888
+  publish = "dist"

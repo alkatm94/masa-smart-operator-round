@@ -29,6 +29,15 @@ npm run build
 npm start
 ```
 
+## Netlify deployment
+
+The repository is configured for Vinext on Vite with Nitro's Netlify preset.
+Netlify must use `npm run build` as the build command and `dist` as the publish
+directory. Nitro writes the SSR function to `.netlify/functions-internal` during
+the build. Do not set the publish directory to `.next`; the legacy Next.js
+adapter is intentionally disabled with `NETLIFY_NEXT_PLUGIN_SKIP=true` in
+`netlify.toml`.
+
 ## Use from iPhone
 
 The development or production server must be reachable over HTTPS from the iPhone (camera access requires a secure context; `localhost` is the desktop-only exception). Open the HTTPS URL in Safari, tap **Share**, choose **Add to Home Screen**, then launch **MASA Round** from the Home Screen. The layout handles iPhone safe areas and standalone display mode.
