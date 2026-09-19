@@ -53,6 +53,7 @@ export interface VisionDetection {
   needleAngle?: number;
   quality: VisionQuality;
   warning?: string;
+  stable?: boolean;
   debug?: VisionDebug;
 }
 export interface GaugeCalibration {
@@ -131,6 +132,27 @@ export function isStable(values: number[], toleranceDegrees = 4) {
   return (
     values.every((v) => angleDistance(v, base) <= toleranceDegrees) &&
     !hasOppositeAmbiguity(values)
+  );
+}
+export function isNumericStable(
+  values: number[],
+  relativeTolerance = 0.02,
+  minimumSamples = 5,
+) {
+  if (values.length < minimumSamples) return false;
+  const sample = values.slice(-7);
+  const mean = sample.reduce((sum, value) => sum + value, 0) / sample.length;
+  const tolerance = Math.max(0.02, Math.abs(mean) * relativeTolerance);
+  return sample.every((value) => Math.abs(value - mean) <= tolerance);
+}
+export function canConfirmLiveDetection(
+  detection: VisionDetection | undefined,
+  threshold = 0.6,
+) {
+  return Boolean(
+    detection?.stable &&
+      detection.value != null &&
+      detection.confidence >= threshold,
   );
 }
 export function needleDirectionScore(m: Omit<RadialMetrics, "score">) {

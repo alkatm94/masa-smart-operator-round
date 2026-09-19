@@ -12,6 +12,9 @@ import {
   needleDirectionScore,
   selectNeedleDirection,
   analyseGauge,
+  canConfirmLiveDetection,
+  isNumericStable,
+  type VisionDetection,
   type RadialMetrics,
 } from "../lib/vision";
 test("gauge calibration converts and clamps", () => {
@@ -134,4 +137,24 @@ test("OCR digits cannot become an analog gauge measured value", () => {
   const result = analyseGauge(syntheticGauge(true));
   assert.equal(result[0]?.value, undefined);
   assert.equal(result[0]?.rawText, undefined);
+});
+test("live readings require a stable sliding window", () => {
+  assert.equal(isNumericStable([55.1, 55.2, 55.2, 55.19]), false);
+  assert.equal(isNumericStable([55.1, 55.2, 55.2, 55.19, 55.18]), true);
+  assert.equal(isNumericStable([55.1, 55.2, 58, 55.19, 55.18]), false);
+});
+test("Confirm Reading is enabled only for a stable confident value", () => {
+  const detection = {
+    id: "live",
+    kind: "gauge",
+    label: "Analog Gauge",
+    box: { x: 0, y: 0, width: 1, height: 1 },
+    confidence: 0.89,
+    value: 55.2,
+    stable: true,
+    quality: { brightness: 1, contrast: 1, sharpness: 1, glare: 0, score: 0.9, warnings: [] },
+  } satisfies VisionDetection;
+  assert.equal(canConfirmLiveDetection(detection, 0.6), true);
+  assert.equal(canConfirmLiveDetection({ ...detection, stable: false }, 0.6), false);
+  assert.equal(canConfirmLiveDetection({ ...detection, value: undefined }, 0.6), false);
 });

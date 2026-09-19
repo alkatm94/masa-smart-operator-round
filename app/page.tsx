@@ -179,10 +179,23 @@ export default function HomePage() {
     setState({ ...state, session: null });
     setView("login");
   };
-  const acceptCamera = ({ photo, detection, ocrRawText }: CameraResult) => {
+  const acceptCamera = ({
+    photo,
+    detection,
+    ocrRawText,
+    timestamp,
+  }: CameraResult) => {
     if (!item) return;
+    const comparison = calculateComparison(item.previous, detection.value!);
+    const threshold =
+      item.unit === "bar"
+        ? state.settings.pressureThreshold
+        : item.unit === "m"
+          ? state.settings.tankThreshold
+          : state.settings.conductivityThreshold;
+    const needsAttention = Math.abs(comparison.percent || 0) > threshold;
     updateItem({
-      photos: [...item.photos, photo],
+      photos: photo ? [...item.photos, photo] : item.photos,
       visionType: detection?.kind,
       detectedLabel: detection?.label,
       aiDetectedValue: detection?.value,
@@ -190,11 +203,15 @@ export default function HomePage() {
       ocrRawText,
       needleAngle: detection?.needleAngle,
       qualityScore: detection?.quality.score,
-      confirmedByUser: false,
-      processingVersion: "vision-1",
-      visionTimestamp: new Date().toISOString(),
+      value: detection.value,
+      confirmedValue: detection.value,
+      status: needsAttention ? "attention" : "completed",
+      confirmedByUser: true,
+      processingVersion: "vision-live-1",
+      visionTimestamp: timestamp,
     });
-    setView("entry");
+    setView("round");
+    toast.success("Live reading confirmed");
   };
   return (
     <div className="app-shell">

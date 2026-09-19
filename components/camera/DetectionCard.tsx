@@ -2,15 +2,17 @@ import type { VisionDetection } from "@/lib/vision";
 export function DetectionCard({
   detection,
   threshold = 0.6,
+  unit,
 }: {
   detection?: VisionDetection;
   threshold?: number;
+  unit?: string;
 }) {
   if (!detection)
     return (
       <div className="detection-card">
-        <b>Looking for a gauge or display…</b>
-        <small>Keep the target inside the guide.</small>
+        <b>Searching...</b>
+        <small>Live AI is looking for the current check.</small>
       </div>
     );
   const low = detection.confidence < threshold;
@@ -20,14 +22,16 @@ export function DetectionCard({
         <b>{detection.label}</b>
         <strong>
           {detection.value != null
-            ? detection.value.toFixed(2)
+            ? `${detection.value.toFixed(2)}${unit ? ` ${unit}` : ""}`
             : detection.kind === "gauge" && detection.needleAngle != null
               ? `${Math.round(detection.needleAngle)}°`
               : "—"}
         </strong>
       </div>
-      {detection.kind === "gauge" && detection.value == null && (
-        <p>Needle detected · Calibration required before numeric reading</p>
+      {detection.kind === "gauge" && (
+        <p>
+          Needle detected · Angle: {Math.round(detection.needleAngle || 0)}°
+        </p>
       )}
       <p>
         Confidence {Math.round(detection.confidence * 100)}% · Quality{" "}
@@ -36,10 +40,10 @@ export function DetectionCard({
       <small>
         {detection.warning ||
           (low
-            ? "Low confidence — retake or enter manually"
-            : detection.debug?.stable
-              ? "Stable reading; operator confirmation is still required"
-              : "Manual confirmation required")}
+            ? "Low confidence"
+            : detection.stable || detection.debug?.stable
+              ? "Stable"
+              : "Reading... Hold steady")}
       </small>
     </div>
   );
