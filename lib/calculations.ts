@@ -1,5 +1,49 @@
-export interface GaugeCalibrationRange { min:number; max:number; minAngle:number; maxAngle:number }
-export function gaugeAngleToReading(angle:number,c:GaugeCalibrationRange){if(c.maxAngle===c.minAngle)throw new Error("Gauge angles must differ");const ratio=Math.min(1,Math.max(0,(angle-c.minAngle)/(c.maxAngle-c.minAngle)));return c.min+ratio*(c.max-c.min)}
-export function calculateComparison(previous:number|undefined,current:number){const difference=previous==null?0:current-previous;const percent=previous==null||previous===0?null:(difference/Math.abs(previous))*100;return{difference,percent}}
-export function calculateTankRate(previous:number|undefined,current:number,hours:number){const difference=previous==null?0:current-previous;return{difference,elapsedHours:hours,rate:hours>0?difference/hours:0,trend:difference>0?"Rising":difference<0?"Falling":"Stable"}}
-export function validateRoundCompletion(items:{required:boolean;status:string;skipReason?:string}[]){const incomplete=items.filter(i=>i.required&&(i.status==="pending"||(i.status==="skipped"&&!i.skipReason?.trim())));return{valid:incomplete.length===0,remaining:incomplete.length}}
+export interface GaugeCalibrationRange {
+  min: number;
+  max: number;
+  minAngle: number;
+  maxAngle: number;
+}
+export function gaugeAngleToReading(angle: number, c: GaugeCalibrationRange) {
+  if (c.maxAngle === c.minAngle) throw new Error("Gauge angles must differ");
+  const ratio = Math.min(
+    1,
+    Math.max(0, (angle - c.minAngle) / (c.maxAngle - c.minAngle)),
+  );
+  return c.min + ratio * (c.max - c.min);
+}
+export function calculateComparison(
+  previous: number | undefined,
+  current: number,
+) {
+  const difference = previous == null ? 0 : current - previous;
+  const percent =
+    previous == null || previous === 0
+      ? null
+      : (difference / Math.abs(previous)) * 100;
+  return { difference, percent };
+}
+export function calculateTankRate(
+  previous: number | undefined,
+  current: number,
+  hours: number,
+) {
+  const difference = previous == null ? 0 : current - previous;
+  return {
+    difference,
+    elapsedHours: hours,
+    rate: hours > 0 ? difference / hours : 0,
+    trend: difference > 0 ? "Rising" : difference < 0 ? "Falling" : "Stable",
+  };
+}
+export function validateRoundCompletion(
+  items: { required: boolean; status: string; skipReason?: string }[],
+) {
+  const incomplete = items.filter(
+    (i) =>
+      i.required &&
+      (i.status === "pending" ||
+        (i.status === "skipped" && !i.skipReason?.trim())),
+  );
+  return { valid: incomplete.length === 0, remaining: incomplete.length };
+}

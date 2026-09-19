@@ -1,7 +1,147 @@
-import type { RoundItem,Round } from "./local-store";
-export interface Station{id:string;name:string;area:string;equipmentCount:number;checkpoints:Omit<RoundItem,"id"|"status"|"photos"|"notes">[]}
-const base=(prefix:string):Station["checkpoints"]=>[{equipment:`${prefix}-MP-1`,label:"Discharge Pressure",kind:"reading",unit:"bar",required:true,previous:3.1},{equipment:`${prefix}-MP-1`,label:"Pump Running Status",kind:"inspection",required:true},{equipment:`${prefix}-MP-2`,label:"Suction Pressure",kind:"reading",unit:"bar",required:true,previous:2.15},{equipment:`${prefix}-MP-2`,label:"Visible Leak & Vibration",kind:"inspection",required:true},{equipment:"Tank",label:"Tank Level",kind:"reading",unit:"m",required:true,previous:9.5},{equipment:"Flow Indicator",label:"Header Flow",kind:"reading",unit:"m³/h",required:true,previous:214},{equipment:"Conductivity Meter",label:"Conductivity",kind:"reading",unit:"µS/cm",required:true,previous:298},{equipment:"Local Panel",label:"RUN / AUTO / REMOTE Status",kind:"inspection",required:true},{equipment:"Main Valve",label:"Valve Position",kind:"inspection",required:true},{equipment:"Generator",label:"Generator & Diesel Status",kind:"inspection",required:true},{equipment:"General Area",label:"Area Safety Inspection",kind:"inspection",required:true},{equipment:"Sight Glass",label:"Sight Glass Condition",kind:"inspection",required:false}];
-const names=["JIC-T","JIC-H","CAMP-10","CAMP-11A","CAMP-11B","RO1","RO2","NWPS ST#1","NWPS ST#2","NWPS ST#3","NWPS ST#4","CAMP-7","EPS","EBS","JBS","WTP","MOT","PS-6"];
-export const stations:Station[]=names.map((name,i)=>({id:name.toLowerCase().replace(/[^a-z0-9]+/g,"-"),name,area:i<5?"Camp Water Network":i<11?"North Water Network":"Water Operations",equipmentCount:10+(i%4),checkpoints:base(name.replace(/[^A-Z0-9]/g,"").slice(0,4))}));
-const hist=(station:string,days:number):Round=>({id:`demo-${station}`,stationId:station.toLowerCase(),stationName:station,operator:"Ahmed Al-Harbi",group:"B",type:"Routine Round",status:"completed",startedAt:new Date(Date.now()-days*86400000).toISOString(),finishedAt:new Date(Date.now()-days*86400000+48*60000).toISOString(),items:base(station.slice(0,4)).map((x,i)=>({...x,id:`h-${station}-${i}`,status:i===2?"attention":"completed",photos:[],notes:i===2?"Reading checked; follow-up requested":"Normal"}))});
-export const seedHistory=[hist("CAMP-11A",1),hist("JIC-H",2),hist("RO1",3)];
+import type { RoundItem, Round } from "./local-store";
+export interface Station {
+  id: string;
+  name: string;
+  area: string;
+  equipmentCount: number;
+  checkpoints: Omit<RoundItem, "id" | "status" | "photos" | "notes">[];
+}
+const base = (prefix: string): Station["checkpoints"] => [
+  {
+    equipment: `${prefix}-MP-1`,
+    label: "Discharge Pressure",
+    kind: "reading",
+    unit: "bar",
+    required: true,
+    previous: 3.1,
+  },
+  {
+    equipment: `${prefix}-MP-1`,
+    label: "Pump Running Status",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: `${prefix}-MP-2`,
+    label: "Suction Pressure",
+    kind: "reading",
+    unit: "bar",
+    required: true,
+    previous: 2.15,
+  },
+  {
+    equipment: `${prefix}-MP-2`,
+    label: "Visible Leak & Vibration",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: "Tank",
+    label: "Tank Level",
+    kind: "reading",
+    unit: "m",
+    required: true,
+    previous: 9.5,
+  },
+  {
+    equipment: "Flow Indicator",
+    label: "Header Flow",
+    kind: "reading",
+    unit: "m³/h",
+    required: true,
+    previous: 214,
+  },
+  {
+    equipment: "Conductivity Meter",
+    label: "Conductivity",
+    kind: "reading",
+    unit: "µS/cm",
+    required: true,
+    previous: 298,
+  },
+  {
+    equipment: "Local Panel",
+    label: "RUN / AUTO / REMOTE Status",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: "Main Valve",
+    label: "Valve Position",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: "Generator",
+    label: "Generator & Diesel Status",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: "General Area",
+    label: "Area Safety Inspection",
+    kind: "inspection",
+    required: true,
+  },
+  {
+    equipment: "Sight Glass",
+    label: "Sight Glass Condition",
+    kind: "inspection",
+    required: false,
+  },
+];
+const names = [
+  "JIC-T",
+  "JIC-H",
+  "CAMP-10",
+  "CAMP-11A",
+  "CAMP-11B",
+  "RO1",
+  "RO2",
+  "NWPS ST#1",
+  "NWPS ST#2",
+  "NWPS ST#3",
+  "NWPS ST#4",
+  "CAMP-7",
+  "EPS",
+  "EBS",
+  "JBS",
+  "WTP",
+  "MOT",
+  "PS-6",
+];
+export const stations: Station[] = names.map((name, i) => ({
+  id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  name,
+  area:
+    i < 5
+      ? "Camp Water Network"
+      : i < 11
+        ? "North Water Network"
+        : "Water Operations",
+  equipmentCount: 10 + (i % 4),
+  checkpoints: base(name.replace(/[^A-Z0-9]/g, "").slice(0, 4)),
+}));
+const hist = (station: string, days: number): Round => ({
+  id: `demo-${station}`,
+  stationId: station.toLowerCase(),
+  stationName: station,
+  operator: "Ahmed Al-Harbi",
+  group: "B",
+  type: "Routine Round",
+  status: "completed",
+  startedAt: new Date(Date.now() - days * 86400000).toISOString(),
+  finishedAt: new Date(Date.now() - days * 86400000 + 48 * 60000).toISOString(),
+  items: base(station.slice(0, 4)).map((x, i) => ({
+    ...x,
+    id: `h-${station}-${i}`,
+    status: i === 2 ? "attention" : "completed",
+    photos: [],
+    notes: i === 2 ? "Reading checked; follow-up requested" : "Normal",
+  })),
+});
+export const seedHistory = [
+  hist("CAMP-11A", 1),
+  hist("JIC-H", 2),
+  hist("RO1", 3),
+];
