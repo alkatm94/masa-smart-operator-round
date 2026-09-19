@@ -1,7 +1,11 @@
 "use client";
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { analyseGauge, type VisionDetection } from "@/lib/vision";
+import {
+  analyseGauge,
+  shouldRunDigitalOcr,
+  type VisionDetection,
+} from "@/lib/vision";
 import { recognizeLocal } from "@/lib/ocr";
 import { VisionOverlay } from "@/components/camera/VisionOverlay";
 import { DetectionCard } from "@/components/camera/DetectionCard";
@@ -22,7 +26,7 @@ export default function VisionTest() {
     const ctx = c.getContext("2d")!;
     ctx.drawImage(img, 0, 0, c.width, c.height);
     const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
-    if (!gauge.length)
+    if (shouldRunDigitalOcr(gauge))
       try {
         const ocr = await recognizeLocal(c);
         if (ocr.value != null)
@@ -134,6 +138,22 @@ export default function VisionTest() {
             <div>
               <small>Digital score</small>
               <b>{detections[0].debug.digitalDisplayScore.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Circle confidence</small>
+              <b>{detections[0].debug.circleConfidence.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Center hub confidence</small>
+              <b>{detections[0].debug.centerHubConfidence.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Scale ring evidence</small>
+              <b>{detections[0].debug.scaleRingEvidence.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Rectangle display confidence</small>
+              <b>{detections[0].debug.rectangleDisplayConfidence.toFixed(3)}</b>
             </div>
             <div>
               <small>Calibration</small>

@@ -40,11 +40,22 @@ export function VisionOverlay({
           )}
           {debugMode && d.debug && (
             <>
+              {d.debug.candidates.map((candidate) => (
+                <i
+                  key={candidate.angle}
+                  className="needle-candidate"
+                  style={{
+                    transform: `rotate(${candidate.angle}deg)`,
+                    opacity: 0.15 + candidate.score * 0.45,
+                  }}
+                />
+              ))}
               <i
                 className="needle-rejected"
                 style={{ transform: `rotate(${d.debug.oppositeAngle}deg)` }}
               />
               <em className="gauge-debug-circle" />
+              <em className="gauge-debug-hub" />
             </>
           )}
         </button>

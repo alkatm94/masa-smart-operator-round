@@ -7,6 +7,7 @@ import {
   analyseGauge,
   hasOppositeAmbiguity,
   isStable,
+  shouldRunDigitalOcr,
   type VisionDetection,
 } from "@/lib/vision";
 import { recognizeLocal } from "@/lib/ocr";
@@ -178,7 +179,7 @@ export default function AICameraScreen({
       setSelected(capturedGauge[0].id);
       return;
     }
-    if (settings.ocrEnabled)
+    if (settings.ocrEnabled && shouldRunDigitalOcr(capturedGauge))
       try {
         const result = await recognizeLocal(c);
         setOcr(result.text);
