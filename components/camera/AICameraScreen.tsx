@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import type { AppState, Round, RoundItem } from "@/lib/local-store";
 import { analyseGauge, canConfirmLiveDetection, hasOppositeAmbiguity, isNumericStable, isStable, matchEquipment, shouldRunDigitalOcr, type VisionDetection, type VisionQuality } from "@/lib/vision";
 import { recognizeLocal } from "@/lib/ocr";
+import { GeneralObjectDetector, GENERAL_MODEL_NAME } from "@/lib/general-object-detector";
+import { mergePipelineResults, prioritizeForContext, type PipelineResult } from "@/lib/vision-orchestrator";
 import { VisionOverlay } from "./VisionOverlay";
 import { DetectionCard } from "./DetectionCard";
 
@@ -16,6 +18,7 @@ export interface CameraResult {
   equipment: string;
 }
 const OCR_INTERVAL = 1600;
+const GENERAL_INTERVAL = 650;
 const emptyQuality = (score: number): VisionQuality => ({ brightness: 0, contrast: 0, sharpness: 0, glare: 0, score, warnings: [] });
 
 export default function AICameraScreen({ item, round, settings, calibration, back, confirm }: {
@@ -36,6 +39,11 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
   const angleHistory = useRef<number[]>([]);
   const valueHistory = useRef<number[]>([]);
   const latestDetections = useRef<VisionDetection[]>([]);
+  const generalDetector = useRef<GeneralObjectDetector>();
+  const pipelineResults = useRef<Record<string, PipelineResult>>({});
+  const generalBusy = useRef(false);
+  const lastGeneralAt = useRef(0);
+  const frameTimes = useRef<number[]>([]);
   const [evidencePhoto, setEvidencePhoto] = useState<string>();
   const [freezeFrame, setFreezeFrame] = useState<string>();
   const [facing, setFacing] = useState<"environment" | "user">("environment");
@@ -44,6 +52,9 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
   const [selected, setSelected] = useState<string | null>(null);
   const [torch, setTorch] = useState(false);
   const [ocr, setOcr] = useState<string>();
+  const [modelState, setModelState] = useState<"loading" | "ready" | "error">("loading");
+  const [debugStats, setDebugStats] = useState({ inferenceMs: 0, objectsFound: 0, dropped: 0, fps: 0, ocrStatus: "idle", gaugeStatus: "searching" });
+  const [pipelineDebug, setPipelineDebug] = useState<Record<string, PipelineResult>>({});
   const cal = useMemo(() => calibration ? ({ minValue: calibration.minValue, maxValue: calibration.maxValue, minAngle: calibration.minAngle, maxAngle: calibration.maxAngle, center: calibration.center, radius: calibration.radius }) : undefined, [calibration]);
   const equipmentLabels = useMemo(() => [...new Set(round.items.map((entry) => entry.equipment))], [round.items]);
   const readingContext = useMemo(() => {
@@ -57,6 +68,14 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
     setDetections(next);
     setSelected((current) => current && next.some((d) => d.id === current) ? current : next[0]?.id || null);
   }, []);
+  const publishMerged = useCallback((source: PipelineResult) => {
+    pipelineResults.current[source.source] = source;
+    setPipelineDebug({ ...pipelineResults.current });
+    const merged = mergePipelineResults(Object.values(pipelineResults.current));
+    const ordered = prioritizeForContext(merged.detections, `${item.label} ${item.unit || ""}`);
+    publish(ordered);
+    setDebugStats((current) => ({ ...current, dropped: merged.dropped }));
+  }, [item.label, item.unit, publish]);
   const stabilizeGauge = useCallback((raw: VisionDetection[]) => raw.map((detection) => {
     if (detection.kind !== "gauge" || detection.needleAngle == null) return detection;
     angleHistory.current = [...angleHistory.current, detection.needleAngle].slice(-7);
@@ -72,33 +91,47 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
   }), [cal]);
   const runLiveOcr = useCallback(async () => {
     const source = canvas.current;
-    if (!source || ocrBusy.current || !settings.ocrEnabled || Date.now() - lastOcrAt.current < OCR_INTERVAL || !shouldRunDigitalOcr(latestDetections.current)) return;
+    if (!source || ocrBusy.current || !settings.ocrEnabled || Date.now() - lastOcrAt.current < OCR_INTERVAL) return;
     ocrBusy.current = true;
+    setDebugStats((current) => ({ ...current, ocrStatus: "running" }));
     lastOcrAt.current = Date.now();
     try {
       const result = await recognizeLocal(source);
-      if (!shouldRunDigitalOcr(latestDetections.current)) return;
       setOcr(result.text);
       const match = matchEquipment(result.text, equipmentLabels)[0];
-      if (readingContext !== "equipment" && result.value != null) {
+      const genericTag = result.text.toUpperCase().match(/\b[A-Z]{2,}(?:[- ][A-Z0-9]+)+\b/)?.[0];
+      const ocrDetections: VisionDetection[] = [];
+      if (match || genericTag) {
+        const label = match?.label || genericTag!;
+        ocrDetections.push({ id: "live-tag", kind: "tag", label: `Equipment Tag: ${label}`, box: result.box || { x: 0.2, y: 0.35, width: 0.6, height: 0.25 }, confidence: match ? Math.min(result.confidence, match.score) : result.confidence, rawText: result.text, stable: true, quality: emptyQuality(result.confidence), source: "equipment-ocr" });
+      }
+      if (readingContext !== "equipment" && result.value != null && shouldRunDigitalOcr(pipelineResults.current.gauge?.detections || [])) {
         valueHistory.current = [...valueHistory.current, result.value].slice(-7);
         const stable = isNumericStable(valueHistory.current);
-        publish([{ id: "live-digital", kind: "digital", label: "Digital Display", box: result.box || { x: 0.18, y: 0.3, width: 0.64, height: 0.4 }, confidence: result.confidence, value: stable ? result.value : undefined, rawText: result.text, stable, quality: emptyQuality(result.confidence), warning: stable ? undefined : "Reading... Hold steady" }]);
-      } else if (match) {
-        publish([{ id: "live-tag", kind: "tag", label: match.label, box: result.box || { x: 0.2, y: 0.35, width: 0.6, height: 0.25 }, confidence: Math.min(result.confidence, match.score), rawText: result.text, stable: true, quality: emptyQuality(result.confidence) }]);
+        ocrDetections.push({ id: "live-digital", kind: "digital", label: "Digital Display", box: result.box || { x: 0.18, y: 0.3, width: 0.64, height: 0.4 }, confidence: result.confidence, value: stable ? result.value : undefined, rawText: result.text, stable, quality: emptyQuality(result.confidence), warning: stable ? undefined : "Reading... Hold steady", source: "digital-ocr" });
       }
+      publishMerged({ source: "equipment-ocr", detections: ocrDetections.filter((d) => d.source === "equipment-ocr"), status: "ready" });
+      publishMerged({ source: "digital-ocr", detections: ocrDetections.filter((d) => d.source === "digital-ocr"), status: "ready" });
+      setDebugStats((current) => ({ ...current, ocrStatus: ocrDetections.length ? "detected" : "clear" }));
     } catch {
       // Offline OCR is best-effort; gauge processing and manual entry continue.
     } finally {
       ocrBusy.current = false;
     }
-  }, [equipmentLabels, publish, readingContext, settings.ocrEnabled]);
+  }, [equipmentLabels, publishMerged, readingContext, settings.ocrEnabled]);
   const handleVision = useCallback((raw: VisionDetection[]) => {
     workerBusy.current = false;
     const next = stabilizeGauge(raw);
-    if (next.length) publish(next);
-    else { publish([]); void runLiveOcr(); }
-  }, [publish, runLiveOcr, stabilizeGauge]);
+    publishMerged({ source: "gauge", detections: next, status: next.length ? "detected" : "clear" });
+    setDebugStats((current) => ({ ...current, gaugeStatus: next.length ? "detected" : "searching" }));
+    void runLiveOcr();
+  }, [publishMerged, runLiveOcr, stabilizeGauge]);
+  useEffect(() => {
+    const detector = new GeneralObjectDetector();
+    generalDetector.current = detector;
+    detector.load().then((loaded) => setModelState(loaded ? "ready" : "error"));
+    return () => detector.close();
+  }, []);
   useEffect(() => {
     try {
       worker.current = new Worker(new URL("../../workers/vision.worker.ts", import.meta.url), { type: "module" });
@@ -125,12 +158,23 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
     const context = target.getContext("2d", { willReadFrequently: true });
     if (!context) return;
     context.drawImage(source, 0, 0, target.width, target.height);
+    const now = performance.now();
+    frameTimes.current = [...frameTimes.current.filter((time) => now - time < 2000), now];
+    if (modelState === "ready" && !generalBusy.current && now - lastGeneralAt.current >= GENERAL_INTERVAL) {
+      generalBusy.current = true;
+      lastGeneralAt.current = now;
+      void generalDetector.current?.detect(target).then((objects) => {
+        const stats = generalDetector.current!.stats;
+        publishMerged({ source: "general", detections: objects, inferenceMs: stats.inferenceMs, status: "ready" });
+        setDebugStats((current) => ({ ...current, inferenceMs: stats.inferenceMs, objectsFound: objects.length, fps: frameTimes.current.length / 2 }));
+      }).finally(() => { generalBusy.current = false; });
+    }
     const image = context.getImageData(0, 0, target.width, target.height);
     if (worker.current) {
       workerBusy.current = true;
       worker.current.postMessage({ id: Date.now(), image, calibration: cal }, [image.data.buffer]);
     } else handleVision(analyseGauge(image, cal));
-  }, [cal, freezeFrame, handleVision, paused, settings.aiCameraEnabled]);
+  }, [cal, freezeFrame, handleVision, modelState, paused, publishMerged, settings.aiCameraEnabled]);
   useEffect(() => {
     process();
     const interval = Math.min(500, Math.max(350, settings.processingInterval || 450));
@@ -177,10 +221,10 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
       <canvas ref={canvas} hidden />
     </div>
     <div className="camera-info">
-      <span><Camera /> Live AI · On-device</span>
-      <p>Analysis starts automatically. No photo is required for a result.</p>
+      <span><Camera /> {modelState === "loading" ? "Loading AI..." : modelState === "ready" ? "AI Ready" : "General AI unavailable"}</span>
+      <p>{modelState === "ready" ? "Scanning environment..." : modelState === "error" ? "Specialized gauge and OCR pipelines remain active." : "Loading local object model..."}</p>
       <DetectionCard detection={chosen} threshold={settings.confidenceThreshold} unit={item.unit} />
-      {settings.aiDebugMode && chosen && <pre>{JSON.stringify(chosen, null, 2)}</pre>}
+      {settings.aiDebugMode && <pre>{JSON.stringify({ generalModelLoaded: modelState === "ready", modelName: GENERAL_MODEL_NAME, ...debugStats, pipelineResults: pipelineDebug, selected: chosen }, null, 2)}</pre>}
     </div>
     <div className="camera-controls live-controls">
       <button className="btn primary live-confirm" disabled={!canConfirm} onClick={confirmReading}>Confirm Reading</button>

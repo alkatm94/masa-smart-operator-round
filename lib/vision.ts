@@ -54,6 +54,8 @@ export interface VisionDetection {
   quality: VisionQuality;
   warning?: string;
   stable?: boolean;
+  source?: "general" | "gauge" | "digital-ocr" | "equipment-ocr" | "industrial";
+  metadata?: Record<string, string | number | boolean | undefined>;
   debug?: VisionDebug;
 }
 export interface GaugeCalibration {
@@ -512,6 +514,7 @@ export function analyseGauge(
       id: "gauge-0",
       kind: "gauge",
       label: "Analog Gauge",
+      source: "gauge",
       box: {
         x: clamp((cx - r) / w),
         y: clamp((cy - r) / h),

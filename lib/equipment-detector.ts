@@ -8,7 +8,7 @@ export class LocalModelAdapter implements ObjectDetectorAdapter {
   private available = false;
   async load() {
     try {
-      const r = await fetch("/models/equipment/model.json", {
+      const r = await fetch("/models/masa-industrial/model.json", {
         cache: "force-cache",
       });
       this.available = r.ok;

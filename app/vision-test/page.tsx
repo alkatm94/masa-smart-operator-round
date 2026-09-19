@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   analyseGauge,
@@ -9,12 +9,22 @@ import {
 import { recognizeLocal } from "@/lib/ocr";
 import { VisionOverlay } from "@/components/camera/VisionOverlay";
 import { DetectionCard } from "@/components/camera/DetectionCard";
+import { GeneralObjectDetector, GENERAL_MODEL_NAME } from "@/lib/general-object-detector";
+import { mergePipelineResults } from "@/lib/vision-orchestrator";
 export default function VisionTest() {
   const [image, setImage] = useState("/test-vision/gauge.svg"),
     [detections, setDetections] = useState<VisionDetection[]>([]),
     [selected, setSelected] = useState<string | null>(null),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [modelReady, setModelReady] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const general = useRef<GeneralObjectDetector>();
+  useEffect(() => {
+    const detector = new GeneralObjectDetector();
+    general.current = detector;
+    detector.load().then(setModelReady);
+    return () => detector.close();
+  }, []);
   const run = async () => {
     setBusy(true);
     const img = new Image();
@@ -26,17 +36,32 @@ export default function VisionTest() {
     const ctx = c.getContext("2d")!;
     ctx.drawImage(img, 0, 0, c.width, c.height);
     const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
+    const common = await general.current?.detect(c) || [];
+    const ocrDetections: VisionDetection[] = [];
     if (shouldRunDigitalOcr(gauge))
       try {
         const ocr = await recognizeLocal(c);
+        const tag = ocr.text.toUpperCase().match(/\b[A-Z]{2,}(?:[- ][A-Z0-9]+)+\b/)?.[0];
+        if (tag)
+          ocrDetections.push({
+            id: "equipment-tag",
+            kind: "tag",
+            label: `Equipment Tag: ${tag}`,
+            rawText: ocr.text,
+            confidence: ocr.confidence,
+            source: "equipment-ocr",
+            box: ocr.box || { x: 0.2, y: 0.35, width: 0.6, height: 0.3 },
+            quality: { brightness: 0, contrast: 0, sharpness: 0, glare: 0, score: ocr.confidence, warnings: [] },
+          });
         if (ocr.value != null)
-          gauge.push({
+          ocrDetections.push({
             id: "ocr",
             kind: "digital",
             label: "Digital display",
             value: ocr.value,
             rawText: ocr.text,
             confidence: ocr.confidence,
+            source: "digital-ocr",
             box: { x: 0.2, y: 0.35, width: 0.6, height: 0.3 },
             quality: {
               brightness: 0,
@@ -48,8 +73,13 @@ export default function VisionTest() {
             },
           });
       } catch {}
-    setDetections(gauge);
-    setSelected(gauge[0]?.id || null);
+    const merged = mergePipelineResults([
+      { source: "general", detections: common },
+      { source: "gauge", detections: gauge },
+      { source: "digital-ocr", detections: ocrDetections },
+    ]).detections;
+    setDetections(merged);
+    setSelected(merged[0]?.id || null);
     setBusy(false);
   };
   return (
@@ -57,7 +87,7 @@ export default function VisionTest() {
       <p className="eyebrow">DEVELOPER TOOL</p>
       <h1>Vision Test Lab</h1>
       <p>
-        Run the same local gauge and OCR pipeline against a test image. No
+        Run general objects, gauge geometry and OCR against one image. No
         upload leaves this browser.
       </p>
       <section className="panel">
@@ -70,6 +100,9 @@ export default function VisionTest() {
           }}
         />
         <div className="chips">
+          <button onClick={() => setImage("/test-vision/general-objects.jpg")}>
+            COCO common objects
+          </button>
           <button onClick={() => setImage("/test-vision/gauge.svg")}>
             Synthetic gauge
           </button>
@@ -78,7 +111,7 @@ export default function VisionTest() {
           </button>
         </div>
         <button className="btn primary" onClick={run} disabled={busy}>
-          {busy ? "Processing…" : "Run local pipeline"}
+          {busy ? "Processing…" : modelReady ? "Run all local pipelines" : "Loading AI…"}
         </button>
       </section>
       <div className="vision-lab">
@@ -96,6 +129,13 @@ export default function VisionTest() {
           detection={detections.find((d) => d.id === selected) || detections[0]}
         />
       </div>
+      <section className="panel">
+        <h2>General Object Detection</h2>
+        <p>{GENERAL_MODEL_NAME} · {modelReady ? "AI Ready" : "Loading AI..."}</p>
+        <div className="table-wrap"><table><thead><tr><th>Object</th><th>Class</th><th>Confidence</th><th>Bounding box</th><th>Source</th></tr></thead><tbody>
+          {detections.map((d) => <tr key={d.id}><td>{d.label}</td><td>{d.kind}</td><td>{Math.round(d.confidence * 100)}%</td><td>{[d.box.x,d.box.y,d.box.width,d.box.height].map((n) => n.toFixed(2)).join(", ")}</td><td>{d.source || "legacy"}</td></tr>)}
+        </tbody></table></div>
+      </section>
       {detections[0]?.debug && (
         <section className="panel">
           <h2>Gauge diagnostics</h2>
