@@ -21,26 +21,29 @@ export default function VisionTest() {
     c.height = Math.round((640 * img.height) / img.width);
     const ctx = c.getContext("2d")!;
     ctx.drawImage(img, 0, 0, c.width, c.height);
-    const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height), {
-      minValue: 0,
-      maxValue: 10,
-      minAngle: -135,
-      maxAngle: 135,
-    });
-    try {
-      const ocr = await recognizeLocal(c);
-      if (ocr.value != null)
-        gauge.push({
-          ...gauge[0],
-          id: "ocr",
-          kind: "digital",
-          label: "OCR reading",
-          value: ocr.value,
-          rawText: ocr.text,
-          confidence: ocr.confidence,
-          box: { x: 0.2, y: 0.35, width: 0.6, height: 0.3 },
-        });
-    } catch {}
+    const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
+    if (!gauge.length)
+      try {
+        const ocr = await recognizeLocal(c);
+        if (ocr.value != null)
+          gauge.push({
+            id: "ocr",
+            kind: "digital",
+            label: "Digital display",
+            value: ocr.value,
+            rawText: ocr.text,
+            confidence: ocr.confidence,
+            box: { x: 0.2, y: 0.35, width: 0.6, height: 0.3 },
+            quality: {
+              brightness: 0,
+              contrast: 0,
+              sharpness: 0,
+              glare: 0,
+              score: ocr.confidence,
+              warnings: [],
+            },
+          });
+      } catch {}
     setDetections(gauge);
     setSelected(gauge[0]?.id || null);
     setBusy(false);
@@ -81,6 +84,7 @@ export default function VisionTest() {
             detections={detections}
             selected={selected}
             onSelect={setSelected}
+            debugMode
           />
           <canvas ref={canvas} hidden />
         </div>
@@ -88,6 +92,56 @@ export default function VisionTest() {
           detection={detections.find((d) => d.id === selected) || detections[0]}
         />
       </div>
+      {detections[0]?.debug && (
+        <section className="panel">
+          <h2>Gauge diagnostics</h2>
+          <div className="details-grid">
+            <div>
+              <small>Classification</small>
+              <b>Analog Gauge</b>
+            </div>
+            <div>
+              <small>Gauge center</small>
+              <b>
+                {detections[0].debug.center.x.toFixed(3)},{" "}
+                {detections[0].debug.center.y.toFixed(3)}
+              </b>
+            </div>
+            <div>
+              <small>Radius</small>
+              <b>{detections[0].debug.radius.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Selected needle angle</small>
+              <b>{detections[0].needleAngle?.toFixed(1)}°</b>
+            </div>
+            <div>
+              <small>Opposite angle</small>
+              <b>{detections[0].debug.oppositeAngle.toFixed(1)}°</b>
+            </div>
+            <div>
+              <small>Needle score</small>
+              <b>{detections[0].debug.needleScore.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Counterweight score</small>
+              <b>{detections[0].debug.oppositeDirectionScore.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Analog score</small>
+              <b>{detections[0].debug.analogGaugeScore.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Digital score</small>
+              <b>{detections[0].debug.digitalDisplayScore.toFixed(3)}</b>
+            </div>
+            <div>
+              <small>Calibration</small>
+              <b>Missing</b>
+            </div>
+          </div>
+        </section>
+      )}
       <Link className="back-link" href="/">
         ‹ Back to application
       </Link>

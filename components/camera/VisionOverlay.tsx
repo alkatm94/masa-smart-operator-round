@@ -4,11 +4,13 @@ export function VisionOverlay({
   selected,
   onSelect,
   showConfidence = true,
+  debugMode = false,
 }: {
   detections: VisionDetection[];
   selected: string | null;
   onSelect: (id: string) => void;
   showConfidence?: boolean;
+  debugMode?: boolean;
 }) {
   return (
     <div className="vision-overlay">
@@ -31,7 +33,19 @@ export function VisionOverlay({
             {showConfidence ? ` · ${Math.round(d.confidence * 100)}%` : ""}
           </span>
           {d.needleAngle != null && (
-            <i style={{ transform: `rotate(${d.needleAngle}deg)` }} />
+            <i
+              className="needle-selected"
+              style={{ transform: `rotate(${d.needleAngle}deg)` }}
+            />
+          )}
+          {debugMode && d.debug && (
+            <>
+              <i
+                className="needle-rejected"
+                style={{ transform: `rotate(${d.debug.oppositeAngle}deg)` }}
+              />
+              <em className="gauge-debug-circle" />
+            </>
           )}
         </button>
       ))}

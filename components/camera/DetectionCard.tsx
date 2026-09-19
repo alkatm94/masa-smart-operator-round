@@ -19,9 +19,16 @@ export function DetectionCard({
       <div>
         <b>{detection.label}</b>
         <strong>
-          {detection.value == null ? "—" : detection.value.toFixed(2)}
+          {detection.value != null
+            ? detection.value.toFixed(2)
+            : detection.kind === "gauge" && detection.needleAngle != null
+              ? `${Math.round(detection.needleAngle)}°`
+              : "—"}
         </strong>
       </div>
+      {detection.kind === "gauge" && detection.value == null && (
+        <p>Needle detected · Calibration required before numeric reading</p>
+      )}
       <p>
         Confidence {Math.round(detection.confidence * 100)}% · Quality{" "}
         {Math.round(detection.quality.score * 100)}%
@@ -30,7 +37,9 @@ export function DetectionCard({
         {detection.warning ||
           (low
             ? "Low confidence — retake or enter manually"
-            : "Stable result; operator confirmation is still required")}
+            : detection.debug?.stable
+              ? "Stable reading; operator confirmation is still required"
+              : "Manual confirmation required")}
       </small>
     </div>
   );
