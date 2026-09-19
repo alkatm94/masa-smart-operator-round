@@ -45,6 +45,8 @@ import {
 import AICameraScreen, {
   type CameraResult,
 } from "@/components/camera/AICameraScreen";
+import { DataCollectionPanel } from "@/components/camera/DataCollectionPanel";
+import { ValveCalibrationPanel } from "@/components/camera/ValveCalibrationPanel";
 
 type View =
   | "login"
@@ -251,6 +253,7 @@ export default function HomePage() {
                 calibration={state.calibrations.find(
                   (c) => c.stationId === round.stationId && c.equipment === item.equipment,
                 )}
+                valveCalibration={state.valveCalibrations.find((c) => c.stationId === round.stationId && c.equipment === item.equipment)}
                 back={() => setView("round")}
                 confirm={acceptCamera}
               />
@@ -1069,7 +1072,7 @@ function EntryScreen({
             Inspection result
             <select
               value={status}
-              onChange={(e) => setStatus(e.target.value as RoundItem["status"])}
+              onChange={(e) => setStatus(e.target.value as "completed" | "attention" | "skipped")}
             >
               <option value="completed">Normal / Completed</option>
               <option value="attention">Attention Required</option>
@@ -1518,6 +1521,7 @@ function SettingsPage({
         </section>
         <section className="panel">
           <h2>AI Camera</h2>
+          <label>Vision mode<select value={s.visionMode} onChange={(e) => update({ visionMode: e.target.value as "industrial" | "general" })}><option value="industrial">Industrial (recommended)</option><option value="general">General/debug</option></select></label>
           <SettingToggle label="Enable local AI" value={s.aiCameraEnabled} onChange={(x) => update({ aiCameraEnabled: x })} />
           <SettingToggle label="Analog gauge detection" value={s.gaugeDetectionEnabled} onChange={(x) => update({ gaugeDetectionEnabled: x })} />
           <SettingToggle label="OCR for displays & tags" value={s.ocrEnabled} onChange={(x) => update({ ocrEnabled: x })} />
@@ -1527,8 +1531,15 @@ function SettingsPage({
           <SettingToggle label="Debug details" value={s.aiDebugMode} onChange={(x) => update({ aiDebugMode: x })} />
           <label>Processing interval ({s.processingInterval} ms)<input type="range" min="250" max="1500" step="50" value={s.processingInterval} onChange={(e) => update({ processingInterval: Number(e.target.value) })} /></label>
           <label>Confidence threshold ({Math.round(s.confidenceThreshold * 100)}%)<input type="range" min="0.3" max="0.95" step="0.05" value={s.confidenceThreshold} onChange={(e) => update({ confidenceThreshold: Number(e.target.value) })} /></label>
+          <label>Industrial detection ({Math.round(s.industrialDetectionThreshold * 100)}%)<input type="range" min="0.2" max="0.95" step="0.05" value={s.industrialDetectionThreshold} onChange={(e) => update({ industrialDetectionThreshold: Number(e.target.value) })} /></label>
+          <label>Valve position ({Math.round(s.valvePositionThreshold * 100)}%)<input type="range" min="0.3" max="0.95" step="0.05" value={s.valvePositionThreshold} onChange={(e) => update({ valvePositionThreshold: Number(e.target.value) })} /></label>
+          <label>OCR ({Math.round(s.ocrThreshold * 100)}%)<input type="range" min="0.3" max="0.95" step="0.05" value={s.ocrThreshold} onChange={(e) => update({ ocrThreshold: Number(e.target.value) })} /></label>
+          <label>Gauge ({Math.round(s.gaugeThreshold * 100)}%)<input type="range" min="0.3" max="0.95" step="0.05" value={s.gaugeThreshold} onChange={(e) => update({ gaugeThreshold: Number(e.target.value) })} /></label>
+          <label>General fallback ({Math.round(s.generalDetectionThreshold * 100)}%)<input type="range" min="0.3" max="0.95" step="0.05" value={s.generalDetectionThreshold} onChange={(e) => update({ generalDetectionThreshold: Number(e.target.value) })} /></label>
           <a className="btn secondary" href="/vision-test">Open Vision Test Lab</a>
         </section>
+        <DataCollectionPanel state={state} setState={setState} />
+        <ValveCalibrationPanel state={state} setState={setState} />
         <section className="panel">
           <h2>Warning thresholds</h2>
           <label>

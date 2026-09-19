@@ -11,19 +11,29 @@ import { VisionOverlay } from "@/components/camera/VisionOverlay";
 import { DetectionCard } from "@/components/camera/DetectionCard";
 import { GeneralObjectDetector, GENERAL_MODEL_NAME } from "@/lib/general-object-detector";
 import { mergePipelineResults } from "@/lib/vision-orchestrator";
+import { MasaIndustrialDetector } from "@/lib/industrial-vision";
 export default function VisionTest() {
   const [image, setImage] = useState("/test-vision/gauge.svg"),
     [detections, setDetections] = useState<VisionDetection[]>([]),
     [selected, setSelected] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [modelReady, setModelReady] = useState(false);
+  const [industrialStatus, setIndustrialStatus] = useState("MASA Industrial Model: Loading");
+  const [industrialStats, setIndustrialStats] = useState<{ ready: boolean; detections: number; inferenceMs: number; modelVersion: string }>({ ready: false, detections: 0, inferenceMs: 0, modelVersion: "not-installed" });
   const canvas = useRef<HTMLCanvasElement>(null);
-  const general = useRef<GeneralObjectDetector>();
+  const general = useRef<GeneralObjectDetector | undefined>(undefined);
+  const industrial = useRef<MasaIndustrialDetector | undefined>(undefined);
   useEffect(() => {
     const detector = new GeneralObjectDetector();
     general.current = detector;
     detector.load().then(setModelReady);
     return () => detector.close();
+  }, []);
+  useEffect(() => {
+    const detector = new MasaIndustrialDetector();
+    industrial.current = detector;
+    detector.load().then((ready) => { setIndustrialStatus(detector.status()); setIndustrialStats({ ready, ...detector.stats }); });
+    return () => detector.dispose();
   }, []);
   const run = async () => {
     setBusy(true);
@@ -37,6 +47,8 @@ export default function VisionTest() {
     ctx.drawImage(img, 0, 0, c.width, c.height);
     const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
     const common = await general.current?.detect(c) || [];
+    const masa = await industrial.current?.detect(c) || [];
+    if (industrial.current) setIndustrialStats({ ready: industrial.current.isReady(), ...industrial.current.stats });
     const ocrDetections: VisionDetection[] = [];
     if (shouldRunDigitalOcr(gauge))
       try {
@@ -74,6 +86,7 @@ export default function VisionTest() {
           });
       } catch {}
     const merged = mergePipelineResults([
+      { source: "masa-industrial", detections: masa, status: industrial.current?.status() },
       { source: "general", detections: common },
       { source: "gauge", detections: gauge },
       { source: "digital-ocr", detections: ocrDetections },
@@ -129,6 +142,11 @@ export default function VisionTest() {
           detection={detections.find((d) => d.id === selected) || detections[0]}
         />
       </div>
+      <section className="panel">
+        <h2>MASA Industrial Detection</h2>
+        <p>{industrialStatus}</p>
+        <p>{industrialStats.ready ? `${industrialStats.detections} objects · ${industrialStats.inferenceMs.toFixed(1)} ms · model ${industrialStats.modelVersion}` : "No industrial labels are emitted until a trained model and metadata are installed."}</p>
+      </section>
       <section className="panel">
         <h2>General Object Detection</h2>
         <p>{GENERAL_MODEL_NAME} · {modelReady ? "AI Ready" : "Loading AI..."}</p>

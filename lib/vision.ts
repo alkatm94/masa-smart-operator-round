@@ -1,4 +1,4 @@
-export type VisionKind = "gauge" | "digital" | "tag" | "equipment";
+export type VisionKind = "gauge" | "digital" | "tag" | "equipment" | "valve";
 export interface VisionBox {
   x: number;
   y: number;
@@ -54,7 +54,7 @@ export interface VisionDetection {
   quality: VisionQuality;
   warning?: string;
   stable?: boolean;
-  source?: "general" | "gauge" | "digital-ocr" | "equipment-ocr" | "industrial";
+  source?: "general" | "gauge" | "digital-ocr" | "equipment-ocr" | "masa-industrial";
   metadata?: Record<string, string | number | boolean | undefined>;
   debug?: VisionDebug;
 }

@@ -7,6 +7,9 @@ import { analyseGauge, canConfirmLiveDetection, hasOppositeAmbiguity, isNumericS
 import { recognizeLocal } from "@/lib/ocr";
 import { GeneralObjectDetector, GENERAL_MODEL_NAME } from "@/lib/general-object-detector";
 import { mergePipelineResults, prioritizeForContext, type PipelineResult } from "@/lib/vision-orchestrator";
+import { MasaIndustrialDetector } from "@/lib/industrial-vision";
+import { DetectionTracker } from "@/lib/detection-tracker";
+import { describeValve, estimateValveIndicatorAngle } from "@/lib/valve-vision";
 import { VisionOverlay } from "./VisionOverlay";
 import { DetectionCard } from "./DetectionCard";
 
@@ -19,13 +22,22 @@ export interface CameraResult {
 }
 const OCR_INTERVAL = 1600;
 const GENERAL_INTERVAL = 650;
+const INDUSTRIAL_INTERVAL = 500;
 const emptyQuality = (score: number): VisionQuality => ({ brightness: 0, contrast: 0, sharpness: 0, glare: 0, score, warnings: [] });
+function cropDetection(source: HTMLCanvasElement, detection: VisionDetection) {
+  const output = document.createElement("canvas");
+  const x = Math.max(0, Math.floor(detection.box.x * source.width)), y = Math.max(0, Math.floor(detection.box.y * source.height));
+  output.width = Math.max(1, Math.floor(detection.box.width * source.width)); output.height = Math.max(1, Math.floor(detection.box.height * source.height));
+  output.getContext("2d")?.drawImage(source, x, y, output.width, output.height, 0, 0, output.width, output.height);
+  return output;
+}
 
-export default function AICameraScreen({ item, round, settings, calibration, back, confirm }: {
+export default function AICameraScreen({ item, round, settings, calibration, valveCalibration, back, confirm }: {
   item: RoundItem;
   round: Round;
   settings: AppState["settings"];
   calibration?: AppState["calibrations"][number];
+  valveCalibration?: AppState["valveCalibrations"][number];
   back: () => void;
   confirm: (result: CameraResult) => void;
 }) {
@@ -39,10 +51,14 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
   const angleHistory = useRef<number[]>([]);
   const valueHistory = useRef<number[]>([]);
   const latestDetections = useRef<VisionDetection[]>([]);
-  const generalDetector = useRef<GeneralObjectDetector>();
+  const generalDetector = useRef<GeneralObjectDetector | undefined>(undefined);
+  const industrialDetector = useRef<MasaIndustrialDetector | undefined>(undefined);
+  const tracker = useRef(new DetectionTracker());
   const pipelineResults = useRef<Record<string, PipelineResult>>({});
   const generalBusy = useRef(false);
   const lastGeneralAt = useRef(0);
+  const industrialBusy = useRef(false);
+  const lastIndustrialAt = useRef(0);
   const frameTimes = useRef<number[]>([]);
   const [evidencePhoto, setEvidencePhoto] = useState<string>();
   const [freezeFrame, setFreezeFrame] = useState<string>();
@@ -53,6 +69,9 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
   const [torch, setTorch] = useState(false);
   const [ocr, setOcr] = useState<string>();
   const [modelState, setModelState] = useState<"loading" | "ready" | "error">("loading");
+  const [industrialState, setIndustrialState] = useState("MASA Industrial Model: Loading");
+  const [industrialReady, setIndustrialReady] = useState(false);
+  const [industrialStats, setIndustrialStats] = useState({ inferenceMs: 0, detections: 0, modelVersion: "not-installed" });
   const [debugStats, setDebugStats] = useState({ inferenceMs: 0, objectsFound: 0, dropped: 0, fps: 0, ocrStatus: "idle", gaugeStatus: "searching" });
   const [pipelineDebug, setPipelineDebug] = useState<Record<string, PipelineResult>>({});
   const cal = useMemo(() => calibration ? ({ minValue: calibration.minValue, maxValue: calibration.maxValue, minAngle: calibration.minAngle, maxAngle: calibration.maxAngle, center: calibration.center, radius: calibration.radius }) : undefined, [calibration]);
@@ -96,19 +115,21 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
     setDebugStats((current) => ({ ...current, ocrStatus: "running" }));
     lastOcrAt.current = Date.now();
     try {
-      const result = await recognizeLocal(source);
+      const roi = pipelineResults.current["masa-industrial"]?.detections.find((d) => d.kind === "tag" || d.kind === "digital");
+      const ocrSource = roi ? cropDetection(source, roi) : source;
+      const result = await recognizeLocal(ocrSource);
       setOcr(result.text);
       const match = matchEquipment(result.text, equipmentLabels)[0];
       const genericTag = result.text.toUpperCase().match(/\b[A-Z]{2,}(?:[- ][A-Z0-9]+)+\b/)?.[0];
       const ocrDetections: VisionDetection[] = [];
       if (match || genericTag) {
         const label = match?.label || genericTag!;
-        ocrDetections.push({ id: "live-tag", kind: "tag", label: `Equipment Tag: ${label}`, box: result.box || { x: 0.2, y: 0.35, width: 0.6, height: 0.25 }, confidence: match ? Math.min(result.confidence, match.score) : result.confidence, rawText: result.text, stable: true, quality: emptyQuality(result.confidence), source: "equipment-ocr" });
+        ocrDetections.push({ id: "live-tag", kind: "tag", label: `Equipment Tag: ${label}`, box: roi?.box || result.box || { x: 0.2, y: 0.35, width: 0.6, height: 0.25 }, confidence: match ? Math.min(result.confidence, match.score) : result.confidence, rawText: result.text, stable: true, quality: emptyQuality(result.confidence), source: "equipment-ocr" });
       }
       if (readingContext !== "equipment" && result.value != null && shouldRunDigitalOcr(pipelineResults.current.gauge?.detections || [])) {
         valueHistory.current = [...valueHistory.current, result.value].slice(-7);
         const stable = isNumericStable(valueHistory.current);
-        ocrDetections.push({ id: "live-digital", kind: "digital", label: "Digital Display", box: result.box || { x: 0.18, y: 0.3, width: 0.64, height: 0.4 }, confidence: result.confidence, value: stable ? result.value : undefined, rawText: result.text, stable, quality: emptyQuality(result.confidence), warning: stable ? undefined : "Reading... Hold steady", source: "digital-ocr" });
+        ocrDetections.push({ id: "live-digital", kind: "digital", label: "Digital Display", box: roi?.box || result.box || { x: 0.18, y: 0.3, width: 0.64, height: 0.4 }, confidence: result.confidence, value: stable ? result.value : undefined, rawText: result.text, stable, quality: emptyQuality(result.confidence), warning: stable ? undefined : "Reading... Hold steady", source: "digital-ocr" });
       }
       publishMerged({ source: "equipment-ocr", detections: ocrDetections.filter((d) => d.source === "equipment-ocr"), status: "ready" });
       publishMerged({ source: "digital-ocr", detections: ocrDetections.filter((d) => d.source === "digital-ocr"), status: "ready" });
@@ -131,6 +152,12 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
     generalDetector.current = detector;
     detector.load().then((loaded) => setModelState(loaded ? "ready" : "error"));
     return () => detector.close();
+  }, []);
+  useEffect(() => {
+    const detector = new MasaIndustrialDetector();
+    industrialDetector.current = detector;
+    detector.load().then((loaded) => { setIndustrialReady(loaded); setIndustrialState(detector.status()); });
+    return () => detector.dispose();
   }, []);
   useEffect(() => {
     try {
@@ -160,7 +187,34 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
     context.drawImage(source, 0, 0, target.width, target.height);
     const now = performance.now();
     frameTimes.current = [...frameTimes.current.filter((time) => now - time < 2000), now];
-    if (modelState === "ready" && !generalBusy.current && now - lastGeneralAt.current >= GENERAL_INTERVAL) {
+    if (settings.visionMode === "industrial" && industrialDetector.current?.isReady() && !industrialBusy.current && now - lastIndustrialAt.current >= INDUSTRIAL_INTERVAL) {
+      industrialBusy.current = true;
+      lastIndustrialAt.current = now;
+      void industrialDetector.current.detect(target).then((objects) => {
+        const tracked = tracker.current.update(objects.filter((object) => object.confidence >= settings.industrialDetectionThreshold));
+        const indicator = tracked.find((object) => object.metadata?.industrialClass === "valve_indicator");
+        const handwheel = tracked.find((object) => object.metadata?.industrialClass === "handwheel");
+        if (indicator) {
+          const indicatorCanvas = cropDetection(target, indicator), indicatorContext = indicatorCanvas.getContext("2d", { willReadFrequently: true });
+          const estimate = indicatorContext ? estimateValveIndicatorAngle(indicatorContext.getImageData(0, 0, indicatorCanvas.width, indicatorCanvas.height)) : undefined;
+          const position = describeValve(estimate?.angle, valveCalibration, true);
+          indicator.needleAngle = estimate?.angle; indicator.value = position.percent; indicator.stable = Boolean(position.percent != null && estimate && estimate.score >= settings.valvePositionThreshold);
+          indicator.label = position.state ? `Valve · ${position.state.replaceAll("_", " ")}` : "Valve Indicator"; indicator.warning = position.warning;
+          indicator.metadata = { ...indicator.metadata, indicatorScore: estimate?.score, valveState: position.state };
+        } else if (handwheel) handwheel.warning = describeValve(undefined, valveCalibration, false).warning;
+        setIndustrialStats({ ...industrialDetector.current!.stats });
+        publishMerged({ source: "masa-industrial", detections: tracked, inferenceMs: industrialDetector.current?.stats.inferenceMs, status: tracked.length ? "detected" : "clear" });
+        const gaugeRoi = tracked.find((object) => object.metadata?.industrialClass === "analog_gauge");
+        if (gaugeRoi) {
+          const crop = cropDetection(target, gaugeRoi), context = crop.getContext("2d", { willReadFrequently: true });
+          if (context) {
+            const specialized = analyseGauge(context.getImageData(0, 0, crop.width, crop.height), cal).map((detection) => ({ ...detection, id: `${gaugeRoi.id}-needle`, box: gaugeRoi.box }));
+            publishMerged({ source: "gauge", detections: stabilizeGauge(specialized), status: specialized.length ? "detected-roi" : "uncertain-roi" });
+          }
+        }
+      }).finally(() => { industrialBusy.current = false; });
+    }
+    if ((settings.visionMode === "general" || !industrialDetector.current?.isReady()) && modelState === "ready" && !generalBusy.current && now - lastGeneralAt.current >= GENERAL_INTERVAL) {
       generalBusy.current = true;
       lastGeneralAt.current = now;
       void generalDetector.current?.detect(target).then((objects) => {
@@ -174,7 +228,7 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
       workerBusy.current = true;
       worker.current.postMessage({ id: Date.now(), image, calibration: cal }, [image.data.buffer]);
     } else handleVision(analyseGauge(image, cal));
-  }, [cal, freezeFrame, handleVision, modelState, paused, publishMerged, settings.aiCameraEnabled]);
+  }, [cal, freezeFrame, handleVision, modelState, paused, publishMerged, settings.aiCameraEnabled, settings.industrialDetectionThreshold, settings.valvePositionThreshold, settings.visionMode, stabilizeGauge, valveCalibration]);
   useEffect(() => {
     process();
     const interval = Math.min(500, Math.max(350, settings.processingInterval || 450));
@@ -221,10 +275,10 @@ export default function AICameraScreen({ item, round, settings, calibration, bac
       <canvas ref={canvas} hidden />
     </div>
     <div className="camera-info">
-      <span><Camera /> {modelState === "loading" ? "Loading AI..." : modelState === "ready" ? "AI Ready" : "General AI unavailable"}</span>
-      <p>{modelState === "ready" ? "Scanning environment..." : modelState === "error" ? "Specialized gauge and OCR pipelines remain active." : "Loading local object model..."}</p>
+      <span><Camera /> {industrialReady ? "Industrial AI Ready" : modelState === "ready" ? "AI Ready" : "Loading AI..."}</span>
+      <p>{industrialState} · {industrialReady ? "Scanning industrial equipment..." : "Gauge, OCR and general fallback active."}</p>
       <DetectionCard detection={chosen} threshold={settings.confidenceThreshold} unit={item.unit} />
-      {settings.aiDebugMode && <pre>{JSON.stringify({ generalModelLoaded: modelState === "ready", modelName: GENERAL_MODEL_NAME, ...debugStats, pipelineResults: pipelineDebug, selected: chosen }, null, 2)}</pre>}
+      {settings.aiDebugMode && <pre>{JSON.stringify({ industrialModel: industrialState, industrialStats, generalModelLoaded: modelState === "ready", modelName: GENERAL_MODEL_NAME, ...debugStats, pipelineResults: pipelineDebug, selected: chosen }, null, 2)}</pre>}
     </div>
     <div className="camera-controls live-controls">
       <button className="btn primary live-confirm" disabled={!canConfirm} onClick={confirmReading}>Confirm Reading</button>

@@ -58,11 +58,32 @@ export interface Calibration {
   min?: number;
   max?: number;
 }
+export interface ValveCalibration {
+  id: string;
+  stationId: string;
+  equipment: string;
+  closedAngle: number;
+  openAngle: number;
+  direction: "clockwise-opens" | "counterclockwise-opens";
+  closedThreshold?: number;
+  openThreshold?: number;
+}
+export interface DataCollectionRecord {
+  id: string;
+  imageDataUrl: string;
+  classLabel: string;
+  stationId: string;
+  equipment: string;
+  capturedAt: string;
+  knownValvePosition?: 0 | 25 | 50 | 75 | 100 | "unknown";
+}
 export interface AppState {
   session: UserSession | null;
   activeRound: Round | null;
   rounds: Round[];
   calibrations: Calibration[];
+  valveCalibrations: ValveCalibration[];
+  dataCollection: DataCollectionRecord[];
   settings: {
     cameraRecognition: boolean;
     voiceNotes: boolean;
@@ -79,6 +100,12 @@ export interface AppState {
     showConfidence: boolean;
     showBoundingBoxes: boolean;
     aiDebugMode: boolean;
+    visionMode: "industrial" | "general";
+    industrialDetectionThreshold: number;
+    valvePositionThreshold: number;
+    ocrThreshold: number;
+    gaugeThreshold: number;
+    generalDetectionThreshold: number;
   };
 }
 const defaults: AppState["settings"] = {
@@ -97,12 +124,20 @@ const defaults: AppState["settings"] = {
   showConfidence: true,
   showBoundingBoxes: true,
   aiDebugMode: false,
+  visionMode: "industrial",
+  industrialDetectionThreshold: 0.45,
+  valvePositionThreshold: 0.65,
+  ocrThreshold: 0.6,
+  gaugeThreshold: 0.55,
+  generalDetectionThreshold: 0.5,
 };
 const initial: AppState = {
   session: null,
   activeRound: null,
   rounds: [],
   calibrations: [],
+  valveCalibrations: [],
+  dataCollection: [],
   settings: defaults,
 };
 const DB = "masa-smart-round",
@@ -129,6 +164,8 @@ function migrate(value: Partial<AppState> | undefined): AppState {
       minValue: c.minValue ?? c.min ?? 0,
       maxValue: c.maxValue ?? c.max ?? 100,
     })),
+    valveCalibrations: value.valveCalibrations || [],
+    dataCollection: value.dataCollection || [],
   };
 }
 export async function loadState() {

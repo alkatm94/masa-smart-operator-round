@@ -1,0 +1,11 @@
+{
+  "name": "MASA Industrial YOLO",
+  "version": "1.0.0",
+  "format": "onnx",
+  "modelPath": "/models/masa-industrial/model.onnx",
+  "inputSize": 640,
+  "classes": ["pump", "motor", "valve", "valve_indicator", "handwheel", "analog_gauge", "digital_meter", "control_panel", "generator", "tank", "pipe", "flange", "nameplate"],
+  "datasetVersion": "1",
+  "confidenceThreshold": 0.45,
+  "iouThreshold": 0.45
+}

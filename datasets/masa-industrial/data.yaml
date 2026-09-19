@@ -1,0 +1,18 @@
+path: .
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: pump
+  1: motor
+  2: valve
+  3: valve_indicator
+  4: handwheel
+  5: analog_gauge
+  6: digital_meter
+  7: control_panel
+  8: generator
+  9: tank
+  10: pipe
+  11: flange
+  12: nameplate

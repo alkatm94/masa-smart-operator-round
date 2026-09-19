@@ -6,3 +6,6 @@ const visionOut=join(process.cwd(),"public","models","mediapipe");await mkdir(vi
 for(const name of ["vision_wasm_internal.js","vision_wasm_internal.wasm","vision_wasm_module_internal.js","vision_wasm_module_internal.wasm","vision_wasm_nosimd_internal.js","vision_wasm_nosimd_internal.wasm"])await copyFile(join(process.cwd(),"node_modules","@mediapipe","tasks-vision","wasm",name),join(visionOut,name));
 await copyFile(join(process.cwd(),"node_modules","@mediapipe","tasks-vision","vision_bundle.mjs"),join(visionOut,"vision_bundle.js"));
 console.log("Local MediaPipe runtime copied to public/models/mediapipe");
+const ortOut=join(process.cwd(),"public","models","onnx");await mkdir(ortOut,{recursive:true});
+for(const name of ["ort-wasm-simd-threaded.asyncify.wasm","ort-wasm-simd-threaded.jsep.wasm","ort-wasm-simd-threaded.jspi.wasm","ort-wasm-simd-threaded.wasm"])await copyFile(join(process.cwd(),"node_modules","onnxruntime-web","dist",name),join(ortOut,name));
+console.log("Local ONNX Runtime Web assets copied to public/models/onnx");

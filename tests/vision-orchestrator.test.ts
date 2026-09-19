@@ -24,6 +24,15 @@ test("specialized gauge wins overlapping general detection", () => {
   assert.equal(merged.dropped, 1);
 });
 
+test("industrial ROI keeps priority while receiving specialist gauge reading", () => {
+  const industrial = detection("masa", "gauge", "masa-industrial");
+  industrial.box = { x: .1, y: .1, width: .6, height: .6 };
+  industrial.metadata = { industrialClass: "analog_gauge" };
+  const gauge = { ...detection("needle", "gauge", "gauge"), box: industrial.box, needleAngle: 42, value: 55.2, stable: true };
+  const merged = mergePipelineResults([{ source: "masa-industrial", detections: [industrial] }, { source: "gauge", detections: [gauge] }]);
+  assert.equal(merged.detections[0].source, "masa-industrial"); assert.equal(merged.detections[0].value, 55.2); assert.equal(merged.detections[0].needleAngle, 42);
+});
+
 test("multiple non-overlapping pipelines reach the overlay together", () => {
   const merged = mergePipelineResults([
     { source: "general", detections: [detection("person", "person", "general", 0.05)] },
