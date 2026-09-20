@@ -11,9 +11,10 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--device", default=None, help="cpu, 0, 0,1 or another Ultralytics device value")
     args = parser.parse_args()
     from ultralytics import YOLO
-    YOLO(args.model).train(data=args.data, epochs=args.epochs, imgsz=args.imgsz, batch=args.batch, project=str(ROOT / "training/runs"), name="masa-industrial")
+    YOLO(args.model).train(data=args.data, epochs=args.epochs, imgsz=args.imgsz, batch=args.batch, device=args.device, project=str(ROOT / "training/runs"), name="masa-industrial")
 
 if __name__ == "__main__":
     main()
