@@ -18,6 +18,7 @@ import {
   Menu,
   Play,
   RotateCcw,
+  ScanLine,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -35,6 +36,7 @@ import {
   type AppState,
   type Round,
   type RoundItem,
+  type ScanSession,
 } from "@/lib/local-store";
 import {
   calculateComparison,
@@ -47,6 +49,7 @@ import AICameraScreen, {
 } from "@/components/camera/AICameraScreen";
 import { DataCollectionPanel } from "@/components/camera/DataCollectionPanel";
 import { ValveCalibrationPanel } from "@/components/camera/ValveCalibrationPanel";
+import { OperatorVisionScan } from "@/components/camera/OperatorVisionScan";
 
 type View =
   | "login"
@@ -54,6 +57,7 @@ type View =
   | "start"
   | "round"
   | "camera"
+  | "vision-scan"
   | "entry"
   | "summary"
   | "history"
@@ -215,6 +219,18 @@ export default function HomePage() {
     setView("round");
     toast.success("Live reading confirmed");
   };
+  const saveVisionScan = (scan: ScanSession) => {
+    if (!round) return;
+    const confirmed = scan.detections.filter((d) => d.reviewStatus === "operator_confirmed" || d.reviewStatus === "operator_edited");
+    const items = round.items.map((roundItem) => {
+      const result = confirmed.find((d) => d.value != null && (!d.equipment || roundItem.equipment.toUpperCase().includes(d.equipment.toUpperCase()) || d.equipment.toUpperCase().includes(roundItem.equipment.toUpperCase())) && (!d.unit || !roundItem.unit || d.unit.toLowerCase() === roundItem.unit.toLowerCase()));
+      if (!result) return roundItem;
+      return { ...roundItem, value: result.value, aiDetectedValue: result.value, confirmedValue: result.value, aiConfidence: result.confidence, confirmedByUser: true, visionType: result.type, visionTimestamp: result.detectedAt, processingVersion: "operator-vision-scan-1", status: "completed" as const };
+    });
+    setState({ ...state, activeRound: { ...round, items }, scanSessions: [scan, ...state.scanSessions] });
+    setView("round");
+    toast.success("Vision scan saved to the active round");
+  };
   return (
     <div className="app-shell">
       <Toaster position="top-center" richColors />
@@ -238,12 +254,16 @@ export default function HomePage() {
             {view === "round" && round && (
               <ActiveRound
                 round={round}
+                scan={() => setView("vision-scan")}
                 select={(id, mode) => {
                   setSelectedItem(id);
                   setView(mode);
                 }}
                 finish={finishRound}
               />
+            )}{" "}
+            {view === "vision-scan" && round && (
+              <OperatorVisionScan round={round} settings={state.settings} calibrations={state.calibrations} back={() => setView("round")} finish={saveVisionScan} />
             )}{" "}
             {view === "camera" && item && round && (
               <AICameraScreen
@@ -281,12 +301,13 @@ export default function HomePage() {
             {view === "history" && (
               <History
                 rounds={[...state.rounds, ...seedHistory]}
+                scans={state.scanSessions}
                 filter={historyFilter}
                 setFilter={setHistoryFilter}
               />
             )}{" "}
             {view === "reports" && (
-              <Reports rounds={[...state.rounds, ...seedHistory]} />
+              <Reports rounds={[...state.rounds, ...seedHistory]} scans={state.scanSessions} />
             )}{" "}
             {view === "stations" && <Stations />}{" "}
             {view === "settings" && (
@@ -704,10 +725,12 @@ function StartRound({
 function ActiveRound({
   round,
   select,
+  scan,
   finish,
 }: {
   round: Round;
   select: (id: string, mode: View) => void;
+  scan: () => void;
   finish: () => void;
 }) {
   const done = round.items.filter((i) => i.status !== "pending").length,
@@ -743,6 +766,9 @@ function ActiveRound({
         </div>
         <span className="badge live">Saved locally</span>
       </div>
+      <button className="btn primary vision-scan-launch" onClick={scan}>
+        <ScanLine /> Operator Vision Scan
+      </button>
       <section className="equipment-list">
         {round.items.map((i) => (
           <article className={`equipment-card ${i.status}`} key={i.id}>
@@ -1213,10 +1239,12 @@ function RoundSummary({
 }
 function History({
   rounds,
+  scans,
   filter,
   setFilter,
 }: {
   rounds: Round[];
+  scans: ScanSession[];
   filter: string;
   setFilter: (x: string) => void;
 }) {
@@ -1242,6 +1270,12 @@ function History({
         </select>
       </div>
       <section className="history-list">
+        {scans.filter((scan) => filter === "All" || scan.stationName === filter).map((scan) => (
+          <article className="history-card" key={scan.id}>
+            <div className="station-mark"><ScanLine /></div>
+            <div className="grow"><div className="row"><div><h3>{scan.stationName} · Vision Scan</h3><p>{date(scan.startTime)} · {time(scan.startTime)}</p></div><span className="badge completed">Completed</span></div><div className="history-stats"><span><b>{new Set(scan.detections.map((item) => item.equipment).filter(Boolean)).size}</b> equipment</span><span><b>{scan.detections.filter((item) => item.value != null).length}</b> readings</span><span><b>{scan.detections.filter((item) => item.reviewStatus === "operator_confirmed" || item.reviewStatus === "operator_edited").length}</b> confirmed</span><span><b>{scan.detections.filter((item) => item.reviewStatus === "rejected").length}</b> rejected</span></div></div>
+          </article>
+        ))}
         {filtered.map((r) => (
           <article className="history-card" key={r.id}>
             <div className="station-mark">{r.stationName.slice(-3)}</div>
@@ -1280,9 +1314,10 @@ function History({
     </div>
   );
 }
-function Reports({ rounds }: { rounds: Round[] }) {
+function Reports({ rounds, scans }: { rounds: Round[]; scans: ScanSession[] }) {
   const [selected, setSelected] = useState(rounds[0]?.id);
   const r = rounds.find((x) => x.id === selected);
+  const roundScans = scans.filter((scan) => scan.roundId === r?.id);
   const csv = () => {
     if (!r) return;
     const rows = [
@@ -1434,6 +1469,7 @@ function Reports({ rounds }: { rounds: Round[] }) {
               evidence photos
             </p>
           </section>
+          {roundScans.map((scan) => <section className="report-summary" key={scan.id}><h3>Operator Vision Scan</h3><p>{scan.detections.filter((item) => item.reviewStatus !== "rejected").map((item) => `${item.equipment || item.label}: ${item.value != null ? `${item.value} ${item.unit || ""}` : item.statusText || item.label} (${item.reviewStatus.replaceAll("_", " ")})`).join(" · ") || "No accepted detections"}</p></section>)}
           <footer>
             Generated locally by MASA Smart Operator Round · Inspection and
             logging only

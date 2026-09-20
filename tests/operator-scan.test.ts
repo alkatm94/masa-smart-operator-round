@@ -1,0 +1,17 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { bestEquipmentMatch, createScanSession, estimateSightGlassLevel, extractEquipmentTags, extractReadingUnit, generateScanSummary, isPossibleObstruction, mapRoiBox, normalizeEquipmentTag, parsePanelIndicators, reviewScanDetection, shouldAutoCapture, sightGlassLevelPercent, updateStableDetection } from "../lib/operator-scan";
+import type { ScanDetection } from "../lib/local-store";
+
+const base = (patch: Partial<ScanDetection> = {}): ScanDetection => ({ id: "d1", trackKey: "MP-4:analog_gauge:Pressure", type: "analog_gauge", label: "Pressure", equipment: "MP-4", value: 3.1, unit: "bar", confidence: .9, bbox: { x: .1, y: .2, width: .3, height: .4 }, detectedAt: "2026-01-01T00:00:00Z", stableFrames: 1, reviewStatus: "ai_detected", source: "gauge", ...patch });
+
+test("OCR normalization and unit extraction", () => { assert.equal(normalizeEquipmentTag(" mp_4 "), "MP-4"); assert.deepEqual(extractEquipmentTags("Pump MP-4 at JIC_H"), ["MP-4", "JIC-H"]); assert.equal(extractReadingUnit("307 uS/cm"), "µS/cm"); });
+test("equipment tag matching is scoped to known equipment", () => { const result = bestEquipmentMatch("MP 4", ["C11A-MP-4", "C11A-MP-7"]); assert.equal(result?.label, "C11A-MP-4"); });
+test("scan session lifecycle and review status", () => { const session = createScanSession("camp", "CAMP", "round", "2026-01-01T00:00:00Z"); session.detections = [base()]; const confirmed = reviewScanDetection(session, "d1", "confirm"); assert.equal(confirmed.detections[0].reviewStatus, "operator_confirmed"); assert.equal(generateScanSummary(confirmed).confirmed, 1); assert.equal(reviewScanDetection(confirmed, "d1", "reject").detections[0].reviewStatus, "rejected"); });
+test("duplicate prevention requires stability and cooldown", () => { const stable = base({ stableFrames: 5 }); assert.equal(shouldAutoCapture(undefined, stable, undefined, 1000), true); assert.equal(shouldAutoCapture(stable, stable, 900, 1000), false); assert.equal(shouldAutoCapture(stable, stable, 900, 31_000, 30_000), true); });
+test("stability increments only for matching close readings", () => { assert.equal(updateStableDetection(base({ stableFrames: 4 }), base({ value: 3.11 })).stableFrames, 5); assert.equal(updateStableDetection(base({ stableFrames: 4 }), base({ value: 5 })).stableFrames, 1); });
+test("ROI mapping returns frame coordinates", () => { assert.deepEqual(mapRoiBox({ x: .5, y: .5, width: .25, height: .25 }, { x: .2, y: .1, width: .4, height: .6 }), { x: .4, y: .4, width: .1, height: .15 }); });
+test("sight glass percentage math validates boundaries", () => { assert.equal(sightGlassLevelPercent(10, 110, 42), 68); assert.equal(sightGlassLevelPercent(10, 10, 10), undefined); });
+test("sight glass image reader rejects an image without a measurable boundary", () => { const data = new Uint8ClampedArray(40 * 100 * 4).fill(180); assert.equal(estimateSightGlassLevel({ width: 40, height: 100, data } as ImageData), undefined); });
+test("panel reader accepts only explicit labelled states", () => { assert.deepEqual(parsePanelIndicators("RUN ON TRIP: OFF AUTO=ON"), { RUN: "ON", TRIP: "OFF", AUTO: "ON" }); assert.deepEqual(parsePanelIndicators("green red amber"), {}); });
+test("general objects become possible obstructions only inside the path region", () => { assert.equal(isPossibleObstruction({ x: .35, y: .5, width: .3, height: .3 }), true); assert.equal(isPossibleObstruction({ x: .01, y: .05, width: .1, height: .1 }), false); });

@@ -77,6 +77,44 @@ export interface DataCollectionRecord {
   capturedAt: string;
   knownValvePosition?: 0 | 25 | 50 | 75 | 100 | "unknown";
 }
+export type ScanDetectionType = "equipment_tag" | "analog_gauge" | "digital_display" | "panel_indicator" | "sight_glass" | "water_leak" | "water_pooling" | "corrosion" | "open_panel_door" | "object_obstruction";
+export interface ScanDetection {
+  id: string;
+  trackKey: string;
+  type: ScanDetectionType;
+  label: string;
+  equipment?: string;
+  value?: number;
+  unit?: string;
+  statusText?: string;
+  confidence: number;
+  bbox: { x: number; y: number; width: number; height: number };
+  detectedAt: string;
+  stableFrames: number;
+  reviewStatus: "ai_detected" | "operator_confirmed" | "operator_edited" | "rejected";
+  source: string;
+}
+export interface ScanSnapshot {
+  id: string;
+  detectionId: string;
+  imageDataUrl: string;
+  timestamp: string;
+  station: string;
+  equipment?: string;
+  detectionType: ScanDetectionType;
+  readingOrStatus: string;
+  confidence: number;
+}
+export interface ScanSession {
+  id: string;
+  stationId: string;
+  stationName: string;
+  roundId: string;
+  startTime: string;
+  endTime?: string;
+  detections: ScanDetection[];
+  snapshots: ScanSnapshot[];
+}
 export interface AppState {
   session: UserSession | null;
   activeRound: Round | null;
@@ -84,6 +122,7 @@ export interface AppState {
   calibrations: Calibration[];
   valveCalibrations: ValveCalibration[];
   dataCollection: DataCollectionRecord[];
+  scanSessions: ScanSession[];
   settings: {
     cameraRecognition: boolean;
     voiceNotes: boolean;
@@ -138,6 +177,7 @@ const initial: AppState = {
   calibrations: [],
   valveCalibrations: [],
   dataCollection: [],
+  scanSessions: [],
   settings: defaults,
 };
 const DB = "masa-smart-round",
@@ -166,6 +206,7 @@ function migrate(value: Partial<AppState> | undefined): AppState {
     })),
     valveCalibrations: value.valveCalibrations || [],
     dataCollection: value.dataCollection || [],
+    scanSessions: value.scanSessions || [],
   };
 }
 export async function loadState() {

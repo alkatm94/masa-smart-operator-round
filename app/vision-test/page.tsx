@@ -12,6 +12,7 @@ import { DetectionCard } from "@/components/camera/DetectionCard";
 import { GeneralObjectDetector, GENERAL_MODEL_NAME } from "@/lib/general-object-detector";
 import { mergePipelineResults } from "@/lib/vision-orchestrator";
 import { MasaIndustrialDetector } from "@/lib/industrial-vision";
+import { ObservationModelStatus } from "@/lib/observation-models";
 export default function VisionTest() {
   const [image, setImage] = useState("/test-vision/gauge.svg"),
     [detections, setDetections] = useState<VisionDetection[]>([]),
@@ -20,7 +21,10 @@ export default function VisionTest() {
     [modelReady, setModelReady] = useState(false);
   const [industrialStatus, setIndustrialStatus] = useState("MASA Industrial Model: Loading");
   const [industrialStats, setIndustrialStats] = useState<{ ready: boolean; detections: number; inferenceMs: number; modelVersion: string }>({ ready: false, detections: 0, inferenceMs: 0, modelVersion: "not-installed" });
+  const [cameraOn, setCameraOn] = useState(false), [observationStatus, setObservationStatus] = useState("Observation models: Loading");
   const canvas = useRef<HTMLCanvasElement>(null);
+  const camera = useRef<HTMLVideoElement>(null);
+  const cameraStream = useRef<MediaStream | undefined>(undefined);
   const general = useRef<GeneralObjectDetector | undefined>(undefined);
   const industrial = useRef<MasaIndustrialDetector | undefined>(undefined);
   useEffect(() => {
@@ -35,16 +39,14 @@ export default function VisionTest() {
     detector.load().then((ready) => { setIndustrialStatus(detector.status()); setIndustrialStats({ ready, ...detector.stats }); });
     return () => detector.dispose();
   }, []);
+  useEffect(() => { const status = new ObservationModelStatus(); void status.load().then(() => setObservationStatus(status.status())); return () => cameraStream.current?.getTracks().forEach((track) => track.stop()); }, []);
+  const startCamera = async () => { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }); cameraStream.current = stream; setCameraOn(true); requestAnimationFrame(() => { if (camera.current) camera.current.srcObject = stream; }); };
   const run = async () => {
     setBusy(true);
-    const img = new Image();
-    img.src = image;
-    await img.decode();
     const c = canvas.current!;
-    c.width = 640;
-    c.height = Math.round((640 * img.height) / img.width);
     const ctx = c.getContext("2d")!;
-    ctx.drawImage(img, 0, 0, c.width, c.height);
+    if (cameraOn && camera.current?.videoWidth) { c.width = 640; c.height = Math.round(640 * camera.current.videoHeight / camera.current.videoWidth); ctx.drawImage(camera.current, 0, 0, c.width, c.height); }
+    else { const img = new Image(); img.src = image; await img.decode(); c.width = 640; c.height = Math.round((640 * img.height) / img.width); ctx.drawImage(img, 0, 0, c.width, c.height); }
     const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
     const common = await general.current?.detect(c) || [];
     const masa = await industrial.current?.detect(c) || [];
@@ -113,6 +115,7 @@ export default function VisionTest() {
           }}
         />
         <div className="chips">
+          <button onClick={() => void startCamera()}>Camera Test</button>
           <button onClick={() => setImage("/test-vision/general-objects.jpg")}>
             COCO common objects
           </button>
@@ -129,7 +132,7 @@ export default function VisionTest() {
       </section>
       <div className="vision-lab">
         <div className="test-canvas">
-          <img src={image} alt="Vision test input" />
+          {cameraOn ? <video ref={camera} autoPlay muted playsInline /> : <img src={image} alt="Vision test input" />}
           <VisionOverlay
             detections={detections}
             selected={selected}
@@ -147,6 +150,7 @@ export default function VisionTest() {
         <p>{industrialStatus}</p>
         <p>{industrialStats.ready ? `${industrialStats.detections} objects · ${industrialStats.inferenceMs.toFixed(1)} ms · model ${industrialStats.modelVersion}` : "No industrial labels are emitted until a trained model and metadata are installed."}</p>
       </section>
+      <section className="panel"><h2>Specialized pipeline results</h2><div className="details-grid"><div><small>Equipment Tag</small><b>{detections.filter((item) => item.kind === "tag").length} result(s)</b></div><div><small>Gauge</small><b>{detections.filter((item) => item.kind === "gauge").length} result(s)</b></div><div><small>Digital OCR</small><b>{detections.filter((item) => item.kind === "digital").length} result(s)</b></div><div><small>Panel / Sight glass</small><b>{observationStatus}</b></div><div><small>Leak / Pooling / Corrosion</small><b>{observationStatus}</b></div><div><small>General</small><b>{detections.filter((item) => item.source === "general").length} result(s)</b></div></div></section>
       <section className="panel">
         <h2>General Object Detection</h2>
         <p>{GENERAL_MODEL_NAME} · {modelReady ? "AI Ready" : "Loading AI..."}</p>
