@@ -12,6 +12,8 @@ import {
   needleDirectionScore,
   selectNeedleDirection,
   analyseGauge,
+  analyseGaugeDetailed,
+  advanceGaugeTemporalState,
   canConfirmLiveDetection,
   isNumericStable,
   type VisionDetection,
@@ -88,6 +90,9 @@ function syntheticGauge(withPrintedNumbers = false) {
     for (let t = -1; t <= 1; t++) set(cx - d, cy + t);
   for (let d = 12; d < 32; d++)
     for (let t = -5; t <= 5; t++) set(cx + d, cy + t);
+  for (let y = cy - 7; y <= cy + 7; y++)
+    for (let x = cx - 7; x <= cx + 7; x++)
+      if (Math.hypot(x - cx, y - cy) <= 7) set(x, y);
   for (let a = 0; a < Math.PI * 2; a += Math.PI / 12)
     for (let d = 62; d < 73; d++)
       set(Math.round(cx + Math.cos(a) * d), Math.round(cy + Math.sin(a) * d));
@@ -137,6 +142,57 @@ test("OCR digits cannot become an analog gauge measured value", () => {
   const result = analyseGauge(syntheticGauge(true));
   assert.equal(result[0]?.value, undefined);
   assert.equal(result[0]?.rawText, undefined);
+});
+function syntheticOfficeScene() {
+  const width = 320, height = 180, data = new Uint8ClampedArray(width * height * 4); data.fill(235);
+  const set = (x: number, y: number, value = 25) => { if (x < 0 || y < 0 || x >= width || y >= height) return; const p = (y * width + x) * 4; data[p] = data[p + 1] = data[p + 2] = value; data[p + 3] = 255; };
+  // Monitor bezel plus dense application/text rows.
+  for (let x = 48; x <= 272; x++) { set(x, 18); set(x, 112); }
+  for (let y = 18; y <= 112; y++) { set(48, y); set(272, y); }
+  for (let y = 30; y < 102; y += 7) for (let x = 60; x < 258; x++) if ((x + y) % 9 < 5) set(x, y, 70);
+  // Keyboard grid and two cup rims on the desk.
+  for (let y = 130; y < 166; y += 6) for (let x = 80; x < 242; x += 12) { set(x, y, 45); set(x + 7, y, 45); }
+  for (const cx of [35, 285]) for (let a = 0; a < Math.PI * 2; a += .03) set(Math.round(cx + Math.cos(a) * 12), Math.round(142 + Math.sin(a) * 12), 55);
+  return { width, height, data } as ImageData;
+}
+const qualityStub = { brightness: 0, contrast: 0, sharpness: 0, glare: 0, score: .8, warnings: [] };
+test("monitor + keyboard + cups + desk never becomes an analog gauge", () => {
+  const objects: VisionDetection[] = [
+    { id: "monitor", kind: "equipment", label: "monitor", confidence: .91, box: { x: .14, y: .08, width: .72, height: .58 }, quality: qualityStub, source: "general" },
+    { id: "keyboard", kind: "equipment", label: "keyboard", confidence: .74, box: { x: .24, y: .7, width: .52, height: .24 }, quality: qualityStub, source: "general" },
+    { id: "cup-1", kind: "equipment", label: "cup", confidence: .73, box: { x: .04, y: .68, width: .14, height: .25 }, quality: qualityStub, source: "general" },
+    { id: "cup-2", kind: "equipment", label: "cup", confidence: .44, box: { x: .82, y: .68, width: .14, height: .25 }, quality: qualityStub, source: "general" },
+  ];
+  const result = analyseGaugeDetailed(syntheticOfficeScene(), undefined, { fullFrame: true, suppressions: objects });
+  assert.deepEqual(objects.filter((item) => /cup|keyboard/.test(item.label)).map((item) => item.label), ["keyboard", "cup", "cup"]);
+  assert.equal(result.detections.length, 0);
+  assert.ok(result.report.reasons.includes("inside_monitor") || result.report.reasons.includes("oversized_bbox") || result.report.reasons.includes("insufficient_circle_coverage"));
+});
+test("dense monitor UI, rectangular panels and screen-contained circular graphics are rejected", () => {
+  const scene = syntheticOfficeScene();
+  assert.equal(analyseGaugeDetailed(scene, undefined, { fullFrame: true }).detections.length, 0);
+  const rectangular = analyseGaugeDetailed(scene, undefined, { candidateBox: { x: .1, y: .2, width: .42, height: .12 } });
+  assert.equal(rectangular.detections.length, 0);
+  assert.ok(rectangular.report.reasons.includes("rectangular_region"));
+  const screen = [{ id: "phone", kind: "equipment" as const, label: "cell phone", confidence: .9, box: { x: .1, y: .1, width: .8, height: .8 }, quality: qualityStub, source: "general" as const }];
+  assert.ok(analyseGaugeDetailed(syntheticGauge(), undefined, { candidateBox: { x: .25, y: .25, width: .3, height: .3 }, suppressions: screen }).report.reasons.includes("inside_monitor"));
+});
+test("validated physical gauge still supports calibration and panel context", () => {
+  const calibration = { minValue: 0, maxValue: 100, minAngle: -180, maxAngle: 180 };
+  const result = analyseGaugeDetailed(syntheticGauge(), calibration, { candidateBox: { x: .25, y: .2, width: .3, height: .3 }, suppressions: [{ id: "panel", kind: "equipment", label: "control panel", confidence: .9, box: { x: .1, y: .1, width: .8, height: .8 }, quality: qualityStub }] });
+  assert.equal(result.report.accepted, true);
+  assert.equal(result.detections[0]?.kind, "gauge");
+  assert.equal(typeof result.detections[0]?.value, "number");
+});
+test("single unstable gauge candidate is not temporally confirmed", () => {
+  const first = advanceGaugeTemporalState(undefined, { x: .2, y: .2, width: .25, height: .25 });
+  assert.equal(first.confirmed, false);
+  const moved = advanceGaugeTemporalState(first.state, { x: .5, y: .1, width: .25, height: .25 });
+  assert.equal(moved.confirmed, false);
+  const second = advanceGaugeTemporalState(undefined, { x: .2, y: .2, width: .25, height: .25 });
+  const third = advanceGaugeTemporalState(second.state, { x: .21, y: .2, width: .25, height: .25 });
+  const fourth = advanceGaugeTemporalState(third.state, { x: .2, y: .21, width: .25, height: .25 });
+  assert.equal(fourth.confirmed, true);
 });
 test("live readings require a stable sliding window", () => {
   assert.equal(isNumericStable([55.1, 55.2, 55.2, 55.19]), false);

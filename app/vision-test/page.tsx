@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  analyseGauge,
+  analyseGaugeDetailed,
   shouldRunDigitalOcr,
   type VisionDetection,
 } from "@/lib/vision";
@@ -22,6 +22,7 @@ export default function VisionTest() {
   const [industrialStatus, setIndustrialStatus] = useState("MASA Industrial Model: Loading");
   const [industrialStats, setIndustrialStats] = useState<{ ready: boolean; detections: number; inferenceMs: number; modelVersion: string }>({ ready: false, detections: 0, inferenceMs: 0, modelVersion: "not-installed" });
   const [cameraOn, setCameraOn] = useState(false), [observationStatus, setObservationStatus] = useState("Observation models: Loading");
+  const [gaugeReport, setGaugeReport] = useState<ReturnType<typeof analyseGaugeDetailed>["report"]>();
   const canvas = useRef<HTMLCanvasElement>(null);
   const camera = useRef<HTMLVideoElement>(null);
   const cameraStream = useRef<MediaStream | undefined>(undefined);
@@ -47,8 +48,10 @@ export default function VisionTest() {
     const ctx = c.getContext("2d")!;
     if (cameraOn && camera.current?.videoWidth) { c.width = 640; c.height = Math.round(640 * camera.current.videoHeight / camera.current.videoWidth); ctx.drawImage(camera.current, 0, 0, c.width, c.height); }
     else { const img = new Image(); img.src = image; await img.decode(); c.width = 640; c.height = Math.round((640 * img.height) / img.width); ctx.drawImage(img, 0, 0, c.width, c.height); }
-    const gauge = analyseGauge(ctx.getImageData(0, 0, c.width, c.height));
     const common = await general.current?.detect(c) || [];
+    const gaugeAnalysis = analyseGaugeDetailed(ctx.getImageData(0, 0, c.width, c.height), undefined, { fullFrame: true, suppressions: common });
+    const gauge = gaugeAnalysis.detections;
+    setGaugeReport(gaugeAnalysis.report);
     const masa = await industrial.current?.detect(c) || [];
     if (industrial.current) setIndustrialStats({ ready: industrial.current.isReady(), ...industrial.current.stats });
     const ocrDetections: VisionDetection[] = [];
@@ -151,6 +154,7 @@ export default function VisionTest() {
         <p>{industrialStats.ready ? `${industrialStats.detections} objects · ${industrialStats.inferenceMs.toFixed(1)} ms · model ${industrialStats.modelVersion}` : "No industrial labels are emitted until a trained model and metadata are installed."}</p>
       </section>
       <section className="panel"><h2>Specialized pipeline results</h2><div className="details-grid"><div><small>Equipment Tag</small><b>{detections.filter((item) => item.kind === "tag").length} result(s)</b></div><div><small>Gauge</small><b>{detections.filter((item) => item.kind === "gauge").length} result(s)</b></div><div><small>Digital OCR</small><b>{detections.filter((item) => item.kind === "digital").length} result(s)</b></div><div><small>Panel / Sight glass</small><b>{observationStatus}</b></div><div><small>Leak / Pooling / Corrosion</small><b>{observationStatus}</b></div><div><small>General</small><b>{detections.filter((item) => item.source === "general").length} result(s)</b></div></div></section>
+      {gaugeReport && !gaugeReport.accepted && <section className="panel"><h2>Gauge candidate diagnostics</h2><p><b>Candidate rejected</b></p><p>Reason: {gaugeReport.reasons.join(", ")}</p><pre>{JSON.stringify({ candidateBox: gaugeReport.candidateBox, candidateSizePercent: gaugeReport.candidateBox.width * gaugeReport.candidateBox.height * 100, ...gaugeReport.metrics }, null, 2)}</pre></section>}
       <section className="panel">
         <h2>General Object Detection</h2>
         <p>{GENERAL_MODEL_NAME} · {modelReady ? "AI Ready" : "Loading AI..."}</p>

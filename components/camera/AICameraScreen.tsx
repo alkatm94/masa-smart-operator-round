@@ -49,6 +49,7 @@ export default function AICameraScreen({ item, round, settings, calibration, val
   const ocrBusy = useRef(false);
   const lastOcrAt = useRef(0);
   const angleHistory = useRef<number[]>([]);
+  const gaugeTrack = useRef<{ box: VisionDetection["box"]; frames: number } | null>(null);
   const valueHistory = useRef<number[]>([]);
   const latestDetections = useRef<VisionDetection[]>([]);
   const generalDetector = useRef<GeneralObjectDetector | undefined>(undefined);
@@ -95,19 +96,30 @@ export default function AICameraScreen({ item, round, settings, calibration, val
     publish(ordered);
     setDebugStats((current) => ({ ...current, dropped: merged.dropped }));
   }, [item.label, item.unit, publish]);
-  const stabilizeGauge = useCallback((raw: VisionDetection[]) => raw.map((detection) => {
+  const stabilizeGauge = useCallback((raw: VisionDetection[]) => {
+    if (!raw.length) { gaugeTrack.current = null; angleHistory.current = []; return []; }
+    const first = raw[0], previous = gaugeTrack.current;
+    const compatible = previous && Math.hypot(first.box.x - previous.box.x, first.box.y - previous.box.y) < 0.06 && Math.abs(first.box.width - previous.box.width) < 0.08 && Math.abs(first.box.height - previous.box.height) < 0.08;
+    gaugeTrack.current = { box: first.box, frames: compatible ? previous.frames + 1 : 1 };
+    // A geometrically valid one-frame proposal remains internal and never
+    // reaches the overlay, scan session, evidence capture, history or reports.
+    if (gaugeTrack.current.frames < 3) return [];
+    return raw.map((detection) => {
     if (detection.kind !== "gauge" || detection.needleAngle == null) return detection;
     angleHistory.current = [...angleHistory.current, detection.needleAngle].slice(-7);
     const stable = isStable(angleHistory.current);
     const ambiguity180 = hasOppositeAmbiguity(angleHistory.current);
     return {
       ...detection,
+      confidence: detection.confidence * (0.75 + 0.25 * Math.min(1, (gaugeTrack.current?.frames || 0) / 5)),
       stable: stable && !ambiguity180,
       value: stable && !ambiguity180 && cal ? detection.value : undefined,
       warning: !cal ? "Calibration required" : ambiguity180 ? "Needle direction uncertain" : stable ? undefined : angleHistory.current.length < 5 ? "Reading..." : "Hold steady",
       debug: detection.debug ? { ...detection.debug, stable, ambiguity180 } : detection.debug,
+      metadata: { ...detection.metadata, temporalFrames: gaugeTrack.current?.frames, temporalStabilityScore: Math.min(1, (gaugeTrack.current?.frames || 0) / 5) },
     };
-  }), [cal]);
+    });
+  }, [cal]);
   const runLiveOcr = useCallback(async () => {
     const source = canvas.current;
     if (!source || ocrBusy.current || !settings.ocrEnabled || Date.now() - lastOcrAt.current < OCR_INTERVAL) return;
@@ -140,11 +152,11 @@ export default function AICameraScreen({ item, round, settings, calibration, val
       ocrBusy.current = false;
     }
   }, [equipmentLabels, publishMerged, readingContext, settings.ocrEnabled]);
-  const handleVision = useCallback((raw: VisionDetection[]) => {
+  const handleVision = useCallback((raw: VisionDetection[], rejectionReasons: string[] = []) => {
     workerBusy.current = false;
     const next = stabilizeGauge(raw);
     publishMerged({ source: "gauge", detections: next, status: next.length ? "detected" : "clear" });
-    setDebugStats((current) => ({ ...current, gaugeStatus: next.length ? "detected" : "searching" }));
+    setDebugStats((current) => ({ ...current, gaugeStatus: next.length ? "detected" : raw.length ? "pending candidate" : rejectionReasons.length ? `Candidate rejected: ${rejectionReasons.join(", ")}` : "searching" }));
     void runLiveOcr();
   }, [publishMerged, runLiveOcr, stabilizeGauge]);
   useEffect(() => {
@@ -162,7 +174,7 @@ export default function AICameraScreen({ item, round, settings, calibration, val
   useEffect(() => {
     try {
       worker.current = new Worker(new URL("../../workers/vision.worker.ts", import.meta.url), { type: "module" });
-      worker.current.onmessage = (event) => handleVision(event.data.detections as VisionDetection[]);
+      worker.current.onmessage = (event) => handleVision(event.data.detections as VisionDetection[], event.data.report?.reasons || []);
       worker.current.onerror = () => { workerBusy.current = false; };
     } catch { worker.current = null; }
     return () => worker.current?.terminate();
@@ -208,7 +220,7 @@ export default function AICameraScreen({ item, round, settings, calibration, val
         if (gaugeRoi) {
           const crop = cropDetection(target, gaugeRoi), context = crop.getContext("2d", { willReadFrequently: true });
           if (context) {
-            const specialized = analyseGauge(context.getImageData(0, 0, crop.width, crop.height), cal).map((detection) => ({ ...detection, id: `${gaugeRoi.id}-needle`, box: gaugeRoi.box }));
+            const specialized = analyseGauge(context.getImageData(0, 0, crop.width, crop.height), cal, { candidateBox: gaugeRoi.box, suppressions: pipelineResults.current.general?.detections }).map((detection) => ({ ...detection, id: `${gaugeRoi.id}-needle`, box: gaugeRoi.box }));
             publishMerged({ source: "gauge", detections: stabilizeGauge(specialized), status: specialized.length ? "detected-roi" : "uncertain-roi" });
           }
         }
@@ -226,8 +238,8 @@ export default function AICameraScreen({ item, round, settings, calibration, val
     const image = context.getImageData(0, 0, target.width, target.height);
     if (worker.current) {
       workerBusy.current = true;
-      worker.current.postMessage({ id: Date.now(), image, calibration: cal }, [image.data.buffer]);
-    } else handleVision(analyseGauge(image, cal));
+      worker.current.postMessage({ id: Date.now(), image, calibration: cal, suppressions: pipelineResults.current.general?.detections || [] }, [image.data.buffer]);
+    } else handleVision(analyseGauge(image, cal, { fullFrame: true, suppressions: pipelineResults.current.general?.detections }));
   }, [cal, freezeFrame, handleVision, modelState, paused, publishMerged, settings.aiCameraEnabled, settings.industrialDetectionThreshold, settings.valvePositionThreshold, settings.visionMode, stabilizeGauge, valveCalibration]);
   useEffect(() => {
     process();

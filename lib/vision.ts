@@ -42,6 +42,45 @@ export interface VisionDebug {
   ambiguity180?: boolean;
   candidates: RadialMetrics[];
 }
+export type GaugeRejectionReason =
+  | "oversized_bbox"
+  | "rectangular_region"
+  | "circle_radius_out_of_range"
+  | "circle_not_contained"
+  | "insufficient_circle_coverage"
+  | "high_text_density"
+  | "inside_monitor"
+  | "no_center_hub"
+  | "no_tick_ring"
+  | "no_valid_needle";
+export interface GaugeValidationReport {
+  accepted: boolean;
+  reasons: GaugeRejectionReason[];
+  candidateBox: VisionBox;
+  metrics: {
+    circularity: number;
+    perimeterCoverage: number;
+    concentricRingEvidence: number;
+    centerHubConfidence: number;
+    radialTickDensity: number;
+    textDensity: number;
+    needleConfidence: number;
+  };
+}
+export interface GaugeAnalysisOptions {
+  /** Set when the supplied pixels are the complete camera frame. */
+  fullFrame?: boolean;
+  /** Candidate coordinates in the complete frame, for detector-proposed ROIs. */
+  candidateBox?: VisionBox;
+  /** General-object detections from the same frame. */
+  suppressions?: VisionDetection[];
+}
+export interface GaugeTemporalState { box: VisionBox; frames: number }
+export function advanceGaugeTemporalState(previous: GaugeTemporalState | undefined, box: VisionBox, requiredFrames = 3) {
+  const compatible = Boolean(previous && Math.hypot(box.x - previous.box.x, box.y - previous.box.y) < 0.06 && Math.abs(box.width - previous.box.width) < 0.08 && Math.abs(box.height - previous.box.height) < 0.08);
+  const state = { box, frames: compatible ? previous!.frames + 1 : 1 };
+  return { state, confirmed: state.frames >= requiredFrames, stabilityScore: clamp(state.frames / Math.max(requiredFrames, 5)) };
+}
 export interface VisionDetection {
   id: string;
   kind: VisionKind;
@@ -247,7 +286,7 @@ function estimateFace(
           let e = 0;
           // A real bezel is often thick: search the whole radial band instead
           // of comparing only two pixels that may both lie on the black rim.
-          for (let band = -10; band <= 10; band += 2) {
+          for (let band = -6; band <= 6; band += 2) {
             const inner = pixel(
               gray,
               w,
@@ -262,15 +301,71 @@ function estimateFace(
               cx + Math.cos(a) * (r + band + 2),
               cy + Math.sin(a) * (r + band + 2),
             );
-            e = Math.max(e, Math.abs(inner - outer));
+            e = Math.max(e, Math.abs(inner - outer) * (1 - Math.abs(band) / 16));
           }
           edge += e;
           if (e > 20) covered++;
         }
-        const score = clamp(edge / (30 * 55)) * 0.45 + (covered / 30) * 0.55;
+        const centerPenalty = Math.hypot(cx - w / 2, cy - h / 2) / min * 0.08;
+        const score = clamp(edge / (30 * 200)) * 0.45 + (covered / 30) * 0.55 - centerPenalty;
         if (score > best.circleScore) best = { cx, cy, r, circleScore: score };
       }
   return best;
+}
+function boxIntersection(a: VisionBox, b: VisionBox) {
+  const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return width * height;
+}
+export function isGaugeSuppressedByScreen(candidate: VisionBox, detections: VisionDetection[]) {
+  const cx = candidate.x + candidate.width / 2, cy = candidate.y + candidate.height / 2;
+  return detections.some((item) => {
+    if (!/^(tv|laptop|monitor|cell phone|keyboard)$/i.test(item.label.trim())) return false;
+    const inside = cx >= item.box.x && cx <= item.box.x + item.box.width && cy >= item.box.y && cy <= item.box.y + item.box.height;
+    const overlap = boxIntersection(candidate, item.box) / Math.max(1e-6, candidate.width * candidate.height);
+    return inside || overlap > 0.4;
+  });
+}
+function physicalDialMetrics(gray: Float32Array, w: number, h: number, cx: number, cy: number, r: number, faceMean: number) {
+  const sectors = 72;
+  let perimeter = 0, innerRing = 0, tickSectors = 0;
+  for (let sector = 0; sector < sectors; sector++) {
+    const angle = sector * Math.PI * 2 / sectors, cos = Math.cos(angle), sin = Math.sin(angle);
+    let outerEdge = 0, innerEdge = 0, tickDark = 0;
+    for (let band = -8; band <= 8; band += 2) {
+      outerEdge = Math.max(outerEdge, Math.abs(pixel(gray, w, h, cx + cos * (r + band - 2), cy + sin * (r + band - 2)) - pixel(gray, w, h, cx + cos * (r + band + 2), cy + sin * (r + band + 2))));
+    }
+    for (let band = -5; band <= 5; band += 2) {
+      const rr = r * 0.84 + band;
+      innerEdge = Math.max(innerEdge, Math.abs(pixel(gray, w, h, cx + cos * (rr - 2), cy + sin * (rr - 2)) - pixel(gray, w, h, cx + cos * (rr + 2), cy + sin * (rr + 2))));
+    }
+    for (let radial = 0.72; radial <= 0.93; radial += 0.025)
+      if (pixel(gray, w, h, cx + cos * r * radial, cy + sin * r * radial) < faceMean - 24) tickDark++;
+    if (outerEdge > 22) perimeter++;
+    if (innerEdge > 17) innerRing++;
+    if (tickDark >= 3) tickSectors++;
+  }
+  // Text and monitor UI create many short horizontal runs throughout the face.
+  // Gauge labels occupy only a minority of rows/sectors, so this rejects dense UI
+  // without penalising normal printed scale numbers.
+  let denseRows = 0, sampledRows = 0;
+  for (let y = Math.floor(cy - r * 0.62); y <= cy + r * 0.62; y += 3) {
+    let runs = 0, inRun = false;
+    for (let x = Math.floor(cx - r * 0.72); x <= cx + r * 0.72; x += 2) {
+      if (Math.hypot(x - cx, y - cy) > r * 0.76) continue;
+      const dark = pixel(gray, w, h, x, y) < faceMean - 28;
+      if (dark && !inRun) runs++;
+      inRun = dark;
+    }
+    if (runs >= 7) denseRows++;
+    sampledRows++;
+  }
+  return {
+    perimeterCoverage: perimeter / sectors,
+    concentricRingEvidence: innerRing / sectors,
+    radialTickDensity: tickSectors / sectors,
+    textDensity: denseRows / Math.max(1, sampledRows),
+  };
 }
 function radialMetrics(
   gray: Float32Array,
@@ -406,20 +501,22 @@ function digitalScore(
     rectangleConfidence,
   };
 }
-export function analyseGauge(
+export function analyseGaugeDetailed(
   image: ImageData,
   calibration?: GaugeCalibration,
-): VisionDetection[] {
+  options: GaugeAnalysisOptions = {},
+): { detections: VisionDetection[]; report: GaugeValidationReport } {
   const { width: w, height: h, data } = image;
-  if (w < 64 || h < 64) return [];
+  const emptyBox = options.candidateBox || { x: 0, y: 0, width: 1, height: 1 };
+  const emptyReport: GaugeValidationReport = { accepted: false, reasons: ["insufficient_circle_coverage"], candidateBox: emptyBox, metrics: { circularity: 0, perimeterCoverage: 0, concentricRingEvidence: 0, centerHubConfidence: 0, radialTickDensity: 0, textDensity: 0, needleConfidence: 0 } };
+  if (w < 64 || h < 64) return { detections: [], report: emptyReport };
   const gray = new Float32Array(w * h);
   for (let p = 0, i = 0; p < gray.length; p++, i += 4)
     gray[p] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
   const q = quality(gray, w, h),
     { cx, cy, r, circleScore } = estimateFace(gray, w, h, calibration);
   let faceSum = 0,
-    faceN = 0,
-    ticks = 0;
+    faceN = 0;
   for (
     let y = Math.max(0, Math.floor(cy - r));
     y < Math.min(h, Math.ceil(cy + r));
@@ -435,11 +532,8 @@ export function analyseGauge(
         faceSum += gray[y * w + x];
         faceN++;
       }
-      if (d > 0.72 && d < 0.94 && gray[y * w + x] < 95) ticks++;
     }
-  const faceMean = faceSum / Math.max(1, faceN),
-    tickScore = clamp(ticks / Math.max(1, faceN * 0.12)),
-    candidates: RadialMetrics[] = [];
+  const faceMean = faceSum / Math.max(1, faceN), candidates: RadialMetrics[] = [];
   let hubDark = 0,
     hubN = 0;
   for (let y = Math.floor(cy - r * 0.14); y <= cy + r * 0.14; y += 2)
@@ -449,6 +543,34 @@ export function analyseGauge(
         hubN++;
       }
   const centerHubConfidence = clamp((hubDark / Math.max(1, hubN) - 0.06) * 3.2);
+  const inferredBox = {
+    x: clamp((cx - r) / w), y: clamp((cy - r) / h),
+    width: clamp((2 * r) / w), height: clamp((2 * r) / h),
+  };
+  const candidateBox = options.candidateBox || inferredBox;
+  const dial = physicalDialMetrics(gray, w, h, cx, cy, r, faceMean);
+  const reasons: GaugeRejectionReason[] = [];
+  const spatialRulesApply = Boolean(options.fullFrame || options.candidateBox);
+  const aspect = options.candidateBox
+    ? w / Math.max(1, h)
+    : (candidateBox.width * w) / Math.max(1e-6, candidateBox.height * h);
+  if (spatialRulesApply && candidateBox.width * candidateBox.height > 0.35) reasons.push("oversized_bbox");
+  if (spatialRulesApply && (aspect < 0.72 || aspect > 1.38)) reasons.push("rectangular_region");
+  if (spatialRulesApply && (candidateBox.width < 0.03 || candidateBox.width > 0.45)) reasons.push("oversized_bbox");
+  if (r / Math.min(w, h) < 0.2 || r / Math.min(w, h) > 0.48) reasons.push("circle_radius_out_of_range");
+  if (cx - r < 1 || cy - r < 1 || cx + r >= w - 1 || cy + r >= h - 1) reasons.push("circle_not_contained");
+  if (circleScore < 0.46 || dial.perimeterCoverage < 0.62 || dial.concentricRingEvidence < 0.12) reasons.push("insufficient_circle_coverage");
+  if (dial.textDensity > 0.42) reasons.push("high_text_density");
+  if (centerHubConfidence < 0.22) reasons.push("no_center_hub");
+  if (dial.radialTickDensity < 0.18) reasons.push("no_tick_ring");
+  if (options.suppressions && isGaugeSuppressedByScreen(candidateBox, options.suppressions)) reasons.push("inside_monitor");
+  const baseReport: GaugeValidationReport = {
+    accepted: false, reasons: [...new Set(reasons)], candidateBox,
+    metrics: { circularity: circleScore, perimeterCoverage: dial.perimeterCoverage, concentricRingEvidence: dial.concentricRingEvidence, centerHubConfidence, radialTickDensity: dial.radialTickDensity, textDensity: dial.textDensity, needleConfidence: 0 },
+  };
+  // This is the hard boundary between candidate validation and gauge reading.
+  // No radial candidate, needle, angle or calibration is produced before it.
+  if (baseReport.reasons.length) return { detections: [], report: baseReport };
   for (let angle = -180; angle < 180; angle += 2)
     candidates.push(radialMetrics(gray, w, h, cx, cy, r, angle, faceMean));
   candidates.sort((a, b) => b.score - a.score);
@@ -462,10 +584,12 @@ export function analyseGauge(
       candidates[0],
     ),
     analogGaugeScore = clamp(
-      circleScore * 0.35 +
-        centerHubConfidence * 0.2 +
-        selected.score * 0.3 +
-        tickScore * 0.15,
+      circleScore * 0.18 +
+        dial.perimeterCoverage * 0.15 +
+        dial.concentricRingEvidence * 0.12 +
+        centerHubConfidence * 0.17 +
+        selected.score * 0.23 +
+        dial.radialTickDensity * 0.15,
     ),
     digital = digitalScore(gray, w, h, faceMean, circleScore),
     digitalDisplayScore = digital.score,
@@ -473,19 +597,22 @@ export function analyseGauge(
       circleScore > 0.3 &&
       centerHubConfidence > 0.16 &&
       selected.score > 0.15 &&
-      tickScore > 0.04;
+      dial.radialTickDensity >= 0.18;
+  if (!structuralAnalog || selected.score < 0.24 || selected.outerReachScore < 0.24 || selected.continuityScore < 0.12) {
+    return { detections: [], report: { ...baseReport, reasons: ["no_valid_needle"], metrics: { ...baseReport.metrics, needleConfidence: selected.score } } };
+  }
   if (
     !structuralAnalog &&
     (analogGaugeScore < 0.38 ||
       (digital.rectangleConfidence > 0.38 &&
         analogGaugeScore <= digitalDisplayScore + 0.08))
   )
-    return [];
+    return { detections: [], report: { ...baseReport, reasons: ["no_valid_needle"], metrics: { ...baseReport.metrics, needleConfidence: selected.score } } };
   const ambiguous = Math.abs(selected.score - opposite.score) < 0.075,
     confidence = clamp(
-      analogGaugeScore * 0.62 +
-        q.score * 0.22 +
-        Math.max(0, selected.score - opposite.score) * 0.5 -
+      analogGaugeScore * 0.75 +
+        q.score * 0.1 +
+        Math.max(0, selected.score - opposite.score) * 0.35 -
         (ambiguous ? 0.12 : 0),
     ),
     debug: VisionDebug = {
@@ -499,7 +626,7 @@ export function analyseGauge(
       circleConfidence: circleScore,
       centerHubConfidence,
       radialNeedleConfidence: selected.score,
-      scaleRingEvidence: tickScore,
+      scaleRingEvidence: dial.radialTickDensity,
       rectangleDisplayConfidence: digital.rectangleConfidence,
       ambiguity180: ambiguous,
       candidates: candidates.slice(0, 8),
@@ -509,7 +636,7 @@ export function analyseGauge(
       : ambiguous
         ? "Needle direction is ambiguous — hold steady"
         : q.warnings[0];
-  return [
+  const detections: VisionDetection[] = [
     {
       id: "gauge-0",
       kind: "gauge",
@@ -532,6 +659,10 @@ export function analyseGauge(
       debug,
     },
   ];
+  return { detections, report: { ...baseReport, accepted: true, reasons: [], metrics: { ...baseReport.metrics, needleConfidence: selected.score } } };
+}
+export function analyseGauge(image: ImageData, calibration?: GaugeCalibration, options: GaugeAnalysisOptions = {}): VisionDetection[] {
+  return analyseGaugeDetailed(image, calibration, options).detections;
 }
 export function imageDifference(a: ImageData, b: ImageData) {
   if (a.width !== b.width || a.height !== b.height)
